@@ -24,6 +24,11 @@ from ai.conversation_starters.ai_conversation_starters import generate_conversat
 # --- AI Re-ranker imports ---
 from ai.discover_profiles.models import Payload
 from ai.discover_profiles.ranking import rank_recommendations
+from ai.discover_profiles.packs import (
+    PackRankingRequest,
+    rank_packs as rank_packs_fn,
+    generate_fun_pack_name,
+)
 
 app = FastAPI()
 
@@ -256,6 +261,25 @@ def rank_recommendations_endpoint(payload: Payload):
     """Rank candidate profiles based on compatibility with user."""
     return rank_recommendations(payload)
 
+
+class PackNameRequest(BaseModel):
+    interest: str
+    category: Optional[str] = None
+    use_llm: bool = True
+
+
+@app.post("/rank/packs")
+def rank_packs_endpoint(req: PackRankingRequest):
+    """Rank interest-based packs by relevance to the user's interests."""
+    return [r.dict() for r in rank_packs_fn(req)]
+
+
+@app.post("/generate/pack-name")
+def generate_pack_name_endpoint(req: PackNameRequest):
+    """Generate a fun 2–3 word pack name for an interest."""
+    model = init_ai() if req.use_llm else None
+    name = generate_fun_pack_name(req.interest, req.category, model=model)
+    return {"name": name}
 # ==============================
 # Image Quality Assessment
 # ==============================
