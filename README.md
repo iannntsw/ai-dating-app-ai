@@ -309,8 +309,6 @@ LANGSMITH_API_KEY=your_langsmith_key_here  # Optional for tracing
 LANGSMITH_PROJECT=your_project_name        # Optional for tracing
 ```
 
-## Development
-
 ### Project Structure
 
 ```
