@@ -16,6 +16,7 @@ Frontend (React Native) → AI Service (FastAPI)
 - **Prompt Enhancement**: Improves user responses to dating prompts
 - **Lovabot**: AI dating coach with RAG-powered advice from dating articles
 - **AI Date Planner**: Intelligent date planning with location-based recommendations
+- **Image Quality Assessment**: AI-powered photo quality scoring using NIMA (Neural Image Assessment)
 - **AI-Powered Matching**: Analyzes user compatibility (planned)
 - **Conversation Starters**: Generates ice-breaker messages (planned)
 - **Content Moderation**: AI-powered content filtering (planned)
@@ -23,6 +24,7 @@ Frontend (React Native) → AI Service (FastAPI)
 ## Prerequisites
 
 - Python 3.9 or higher
+- Docker (for Image Quality Assessment)
 - OpenAI API key (for GPT models)
 - Google Gemini API key (for embeddings)
 - Access to the main NestJS backend
@@ -79,6 +81,23 @@ Frontend (React Native) → AI Service (FastAPI)
    - **Lovabot**: Read all PDF files from `ai/ai_lovabot/data/` folder, process and create embeddings for dating articles, save to `ai/ai_lovabot/embeddings.pkl`
    - **Date Planner**: Load all location data from GeoJSON/KML files, generate embeddings for locations, save to `ai/ai_date_planner/embeddings/` folder
    - Both systems will be ready to use after running these setup scripts
+
+6. **Set up Image Quality Assessment (NIMA)**
+
+   ```bash
+   # Navigate to the image quality assessment directory
+   cd ai/image-quality-assessment
+
+   # Build the Docker image for NIMA (Neural Image Assessment)
+   docker build -t nima-cpu . -f Dockerfile.cpu
+   ```
+
+   This will:
+
+   - Build a Docker image with TensorFlow 2.0.0 and NIMA dependencies
+   - Install required system packages (bzip2, g++, git, graphviz, etc.)
+   - Install Python dependencies (scikit-learn, pillow, nose)
+   - Create a ready-to-use image quality assessment container
 
 ## Running the Service
 
@@ -172,6 +191,33 @@ Chat with Lovabot - your AI dating coach with access to dating articles and advi
 ### POST /ai/plan-date
 
 Plan a complete date itinerary using AI-powered location recommendations.
+
+### POST /ai/assess-image-quality
+
+Assess the quality of user profile photos using NIMA (Neural Image Assessment).
+
+**Request:**
+
+```json
+{
+  "image_url": "https://example.com/profile-photo.jpg"
+}
+```
+
+**Response:**
+
+```json
+{
+  "quality_score": 7.2,
+  "technical_score": 6.8,
+  "aesthetic_score": 7.6,
+  "recommendations": [
+    "Consider better lighting",
+    "Try a different angle",
+    "Ensure the image is in focus"
+  ]
+}
+```
 
 **Request:**
 
@@ -300,6 +346,17 @@ ai-dating-app-ai/
             ├── HeritageTrails.kml
             ├── SportSGSportFacilitiesGEOJSON.geojson
             └── TouristAttractions.geojson
+    └── image-quality-assessment/
+        ├── Dockerfile.cpu               # CPU-based Docker configuration
+        ├── Dockerfile.gpu               # GPU-based Docker configuration
+        ├── src/                         # NIMA source code
+        │   ├── requirements.txt         # Python dependencies
+        │   ├── trainer/                 # Training modules
+        │   ├── evaluater/               # Evaluation modules
+        │   └── utils/                   # Utility functions
+        ├── entrypoints/                 # Docker entrypoint scripts
+        ├── models/                      # Pre-trained NIMA models
+        └── data/                        # Training and test datasets
 ```
 
 ### Adding New AI Features
@@ -314,6 +371,10 @@ ai-dating-app-ai/
 
 1. **API key errors**: Verify your Google Gemini API key is correct
 2. **Port conflicts**: Change the port in the uvicorn command if 8000 is taken
+3. **Docker build errors**: If you encounter issues building the NIMA image, try:
+   - `docker system prune -f` to clean up Docker cache
+   - Ensure Docker Desktop is running
+   - Check that you have sufficient disk space (image is ~1.6GB)
 
 ### Logs
 
@@ -326,6 +387,19 @@ The service uses LangSmith for tracing. Check your LangSmith dashboard for detai
 3. Make your changes
 4. Test thoroughly
 5. Submit a pull request
+
+## Acknowledgments
+
+This project uses the Image Quality Assessment model for photo quality scoring. Please cite the following if you use this in your research:
+
+```bibtex
+@misc{idealods2018imagequalityassessment,
+  title={Image Quality Assessment},
+  author={Christopher Lennan and Hao Nguyen and Dat Tran},
+  year={2018},
+  howpublished={\url{https://github.com/idealo/image-quality-assessment}},
+}
+```
 
 ## License
 
