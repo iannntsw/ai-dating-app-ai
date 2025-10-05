@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ai.ai_date_planner.ai_date_planner import AIDatePlanner
 from ai.ai_date_planner.rule_engine import UserPreferences
+from ai.conversation_starters.ai_conversation_starters import generate_conversation_starters
 
 # --- AI Re-ranker imports ---
 from ai.discover_profiles.models import Payload
@@ -119,6 +120,71 @@ def generate_lovabot_response(request: dict):
     # Use lovabot chat function with RAG
     response = lovabot_chat(messages)
     return response
+
+@app.post("/ai/generate-conversation-starters")
+def generate_conversation_starters_endpoint(request: dict):
+    """
+    Generate personalized conversation starters for two users.
+    
+    Request format:
+    {
+        "user1": {
+            "name": "John",
+            "age": 25,
+            "gender": "male",
+            "interests": ["photography", "hiking"],
+            "bio": "Love outdoor adventures",
+            "job": "Photographer",
+            "education": "College",
+            "location": "New York"
+        },
+        "user2": {
+            "name": "Sarah", 
+            "age": 23,
+            "gender": "female",
+            "interests": ["photography", "coffee"],
+            "bio": "Coffee enthusiast and photographer",
+            "job": "Designer",
+            "education": "University",
+            "location": "New York"
+        },
+        "sharedInterests": ["photography"]
+    }
+    
+    Response format:
+    {
+        "success": true,
+        "starters": [
+            {
+                "text": "I see we both love photography! What got you into it?",
+                "type": "interest",
+                "category": "photography", 
+                "confidence": 0.9
+            }
+        ]
+    }
+    """
+    try:
+        # Extract data from request
+        user1 = request.get("user1", {})
+        user2 = request.get("user2", {})
+        shared_interests = request.get("sharedInterests", [])
+        
+        # Generate conversation starters (support refresh flag to bypass cache)
+        refresh = bool(request.get("refresh", False))
+        starters = generate_conversation_starters(user1, user2, shared_interests, refresh)
+        
+        return {
+            "success": True,
+            "starters": starters
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Error generating conversation starters: {str(e)}",
+            "starters": []
+        }
 
 # Date Planner Models
 class DatePlanRequest(BaseModel):
