@@ -166,20 +166,16 @@ non_breakfast_keywords = [
 
 ### **Rule-Based Filtering (Step 1)**
 
-1. **Exclusion Filter (First Priority)** - Removes excluded activity types:
+**Active Filters:**
+
+1. **Exclusion Filter** - Removes user-selected exclusions (max 2):
 
    - Checks location name/description against exclusion keywords
    - **NEVER excludes food locations** (meals required)
-   - Processed before all other filters
+   - Processed first for efficiency
+   - Options: Sports, Cultural, Nature
 
-2. **Interest Filter** - Matches user interests:
-
-   - If no interests specified, includes all locations
-   - If interests specified, only includes matching locations
-   - **Exception**: Food locations always included for meals
-   - **Enhancement**: General attractions allowed if they don't match exclusions
-
-3. **Budget Filter** - **ONLY applies to food locations:**
+2. **Budget Filter** - **ONLY applies to food locations:**
 
    - **Food locations**: Filtered by budget tier keywords (`upscale`, `premium`, `luxury`, etc.)
    - **Cafes/Coffee shops**: ALWAYS kept regardless of budget (needed for breakfast/coffee)
@@ -190,21 +186,22 @@ non_breakfast_keywords = [
      - `$$$`: `upscale`, `fine dining`, `premium`, `luxury`
    - **Cafe keywords (always kept)**: `cafe`, `coffee`, `kopi`, `bistro`, `bakery`, `patisserie`, `espresso`, `starbucks`, `toast`
 
-4. **Time Filter** - Very lenient - only excludes locations that explicitly conflict
+**Removed Filters** (replaced by smarter systems):
 
-5. **Date Type Filter** - Enhanced for romantic dates:
-   - **Romantic**: Excludes child-focused venues
-   - **Cultural**: Excludes child-focused venues
-   - All types: Age-appropriate filtering
+- ~~Interest Filter~~ → Now handled by **RAG semantic search** (finds relevant locations based on interests)
+- ~~Time Filter~~ → Now handled by **meal-time planning logic** (plans appropriate meals based on time windows)
+- ~~Date Type Filter~~ → Now handled by **date-vibe system** + **food re-ranking** + **activity prioritization**
+
+**Why removed?** These filters were too lenient and excluded 0 locations. The new systems are more effective!
 
 ### **RAG-Based Relevance (Step 2)**
 
 - Uses **FAISS index** for fast semantic similarity search (k=200)
 - **Graceful fallback** to cosine similarity if FAISS unavailable
-- Combines **70% semantic relevance** + **30% proximity score** (prioritizes quality over convenience)
-- Returns top **100** most relevant locations via diversity sampling
-- **Diversity sampling**: Ensures 70 food + 10 attractions + 10 activities + 10 heritage minimum
-- **Why?** Prevents RAG from returning 99 food + 1 attraction (was happening before)
+- Combines **60% semantic relevance** + **40% proximity score** (balances quality with convenience)
+- Returns top **70** most relevant locations via diversity sampling (more focused results)
+- **Diversity sampling**: Ensures 40 food + 10 attractions + 6 activities + 5 heritage minimum
+- **Why?** Prevents RAG from returning 69 food + 1 attraction, ensures variety while staying focused
 
 ### **Date Type Differentiation (3-Layer System)**
 
@@ -227,14 +224,48 @@ The system uses **THREE layers** to differentiate date types:
 - Cultural → Prioritizes heritage sites + museums
 - Romantic/Casual → Standard RAG-driven selection
 
+### **Date Vibe Category System:**
+
+Each tourist attraction is automatically assigned compatible date vibes based on its category:
+
+| **Category**           | **Date Vibes**             | **Count** | **Examples**                                   |
+| ---------------------- | -------------------------- | --------- | ---------------------------------------------- |
+| **places-to-see**      | Casual, Adventurous        | 13        | Fort Canning Park, Marina Bay Sands SkyPark    |
+| **recreation-leisure** | Casual, Romantic           | 6         | Singapore Flyer, Gardens by the Bay            |
+| **architecture**       | Casual, Romantic, Cultural | 20        | CHIJMES, National Gallery, Fullerton Hotel     |
+| **nature-wildlife**    | Adventurous                | 19        | MacRitchie Reservoir, Sentosa Nature Walk      |
+| **arts**               | Romantic                   | 13        | ArtScience Museum, Lasalle College of the Arts |
+| **adventure-leisure**  | Adventurous                | 2         | Universal Studios, Adventure Cove Waterpark    |
+| **culture-heritage**   | Cultural                   | 17        | Thian Hock Keng Temple, Malay Heritage Centre  |
+| **history**            | Cultural                   | 18        | Fort Siloso, Battle Box Museum                 |
+| **Sports Facilities**  | All (Fallback)             | 35        | Swimming complexes, stadiums, tennis centers   |
+| **Heritage Trails**    | All (Fallback)             | 19        | Civic District Trail, Chinatown Trail          |
+| **Food Locations**     | All (Always Compatible)    | 31,473    | All restaurants, cafes, hawker centers         |
+
+**🎯 Date Type Coverage (Attractions Only):**
+
+| **Date Type**   | **Matching Categories**                           | **Total Attractions** |
+| --------------- | ------------------------------------------------- | --------------------- |
+| **Casual**      | places-to-see, recreation-leisure, architecture   | 39 attractions        |
+| **Romantic**    | architecture, recreation-leisure, arts            | 39 attractions        |
+| **Adventurous** | nature-wildlife, places-to-see, adventure-leisure | 34 attractions        |
+| **Cultural**    | culture-heritage, history, architecture           | 55 attractions        |
+
+**📝 Notes:**
+
+- Sports facilities (35) and heritage trails (19) have **NO date_vibe** → Act as fallback for all date types
+- Food locations (31,473) are **ALWAYS compatible** with all date types (never filtered by vibe)
+- Total tourist attractions: **109** (with date_vibe categorization)
+- Fallback mechanism ensures locations without categories can still appear in any date type
+
 ### **Date Type Characteristics Summary:**
 
-| Date Type       | Food Re-Ranking Query (RAG Semantic)                                                                  | Activity Priority                                   | Expected Venues                                                        | Max Sports |
-| --------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- | ---------- |
-| **Casual**      | "casual relaxed friendly comfortable laid-back bistro cafe food court family-friendly"                | Standard flow                                       | Bistros, cafes, casual restaurants, shopping                           | 1          |
-| **Romantic**    | "romantic intimate cozy candlelit elegant fine dining rooftop waterfront scenic wine couple-friendly" | Standard flow                                       | Fine dining, rooftop bars, waterfront, scenic walks                    | 1          |
-| **Adventurous** | "outdoor adventure unique fusion experimental street food hawker food market outdoor seating"         | **1. Sports (max 1)** <br> **2. Nature walks**      | Hawker centers, fusion food, tennis/swimming + nature walks            | 1          |
-| **Cultural**    | "traditional heritage cultural authentic peranakan historical traditional ambiance art cafe"          | **1. Heritage sites** <br> **2. Museums/galleries** | Peranakan food, traditional cuisine, museums, temples, heritage trails | 1          |
+| Date Type       | Food Re-Ranking Query (RAG Semantic)                                                                  | Activity Priority (Vibe-Based)                                                   | Expected Venues                                                         | Max Sports |
+| --------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------- |
+| **Casual**      | "casual relaxed friendly comfortable laid-back bistro cafe food court family-friendly"                | **1. Casual-vibe attractions** <br> **2. Fallback attractions**                  | Bistros, cafes, casual restaurants, shopping, city viewpoints           | 1          |
+| **Romantic**    | "romantic intimate cozy candlelit elegant fine dining rooftop waterfront scenic wine couple-friendly" | **1. Romantic-vibe attractions** <br> **2. Fallback attractions**                | Fine dining, rooftop bars, waterfront, arts venues, architecture        | 1          |
+| **Adventurous** | "outdoor adventure unique fusion experimental street food hawker food market outdoor seating"         | **1. Sports (max 1)** <br> **2. Adventurous-vibe walks** <br> **3. Fallback**    | Hawker centers, fusion food, tennis/swimming, nature walks, theme parks | 1          |
+| **Cultural**    | "traditional heritage cultural authentic peranakan historical traditional ambiance art cafe"          | **1. Heritage sites** <br> **2. Cultural-vibe attractions** <br> **3. Fallback** | Peranakan food, traditional cuisine, museums, temples, heritage trails  | 1          |
 
 **How Re-Ranking Works:**
 
@@ -443,11 +474,11 @@ def _get_attraction_activity_type(location, exclude_nature, exclude_cultural):
 
 **Expected Output:**
 
-- Breakfast at cafe ($10) - Not Toast Box/Ya Kun (reserved for breakfast only)
+- Breakfast at cafe ($10) - Allows Starbucks, Coffee Bean, Ya Kun, Toast Box, etc.
 - Morning activity (shopping, walk, or cultural - based on date type)
-- Lunch at restaurant ($16-32) - Not breakfast-only places
+- Lunch at restaurant ($16-32) - **Excludes** coffee shops (Starbucks, Coffee Bean) and breakfast-only places (Ya Kun, Toast Box)
 - Afternoon activity (based on date type priority)
-- Coffee break at cafe ($10)
+- Coffee break at cafe ($10) - Allows Starbucks, Coffee Bean, etc.
 - Evening activity (final activity may be extended to hit 75% coverage)
 - Dinner at restaurant ($20-40) - Date type appropriate
 - Total: 8 hours, $56-92 per person (only food costs, activities free)

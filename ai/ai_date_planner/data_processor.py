@@ -14,13 +14,28 @@ class Location:
     address: Optional[str] = None
     description: Optional[str] = None
     metadata: Dict[str, Any] = None
+    date_vibe: Optional[List[str]] = None  # Compatible date types: ['casual', 'romantic', 'adventurous', 'cultural']
     
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
+        if self.date_vibe is None:
+            self.date_vibe = []
 
 class DataProcessor:
     """Processes GeoJSON and KML files to create unified location objects"""
+    
+    # Category to date-vibe mapping
+    CATEGORY_TO_DATE_VIBE = {
+        'places-to-see': ['casual', 'adventurous'],
+        'recreation-leisure': ['casual', 'romantic'],
+        'architecture': ['casual', 'romantic', 'cultural'],
+        'nature-wildlife': ['adventurous'],
+        'arts': ['romantic'],
+        'adventure-leisure': ['adventurous'],
+        'culture-heritage': ['cultural'],
+        'history': ['cultural'],
+    }
     
     def __init__(self, data_dir: str = "ai/ai_date_planner/data"):
         self.data_dir = data_dir
@@ -103,6 +118,20 @@ class DataProcessor:
             address = self._extract_address(properties)
             description = self._extract_description(properties, location_type)
             
+            # Extract category from URL and assign date-vibe
+            date_vibe = self._extract_date_vibe(properties, location_type)
+            
+            # For attractions: If address is a boundary description or starts with "Bounded by", 
+            # append Google Maps link for better navigation
+            if location_type == 'attraction' and address:
+                if address.lower().startswith('bounded by') or 'bounded by' in address.lower():
+                    # Keep the description but add a clickable Maps link
+                    address = f"https://www.google.com/maps?q={lat},{lon}"
+            
+            # If no address at all for attractions, provide Google Maps link
+            if location_type == 'attraction' and not address:
+                address = f"https://www.google.com/maps?q={lat},{lon}"
+            
             return Location(
                 id=location_id,
                 name=name,
@@ -110,7 +139,8 @@ class DataProcessor:
                 coordinates=(lon, lat),
                 address=address,
                 description=description,
-                metadata=properties
+                metadata=properties,
+                date_vibe=date_vibe
             )
             
         except Exception as e:
@@ -152,9 +182,10 @@ class DataProcessor:
     def _extract_kml_location(self, placemark, location_type: str, ns: Dict) -> Optional[Location]:
         """Extract location data from a KML Placemark"""
         try:
-            # Get name from ExtendedData/SimpleData fields
+            # Get name, trail name, and permalink from ExtendedData/SimpleData fields
             name = None
             trail_name = None
+            hrp_permalink = None
             
             # Look for ExtendedData/SimpleData fields
             extended_data = placemark.find('.//kml:ExtendedData/kml:SchemaData', ns)
@@ -165,6 +196,8 @@ class DataProcessor:
                         name = simple_data.text.strip() if simple_data.text else None
                     elif field_name == 'Trail Name':
                         trail_name = simple_data.text.strip() if simple_data.text else None
+                    elif field_name == 'HRP Permalink':
+                        hrp_permalink = simple_data.text.strip() if simple_data.text else None
             
             # Fallback to <name> element if available
             if not name:
@@ -195,15 +228,19 @@ class DataProcessor:
             metadata = {
                 'source': 'kml',
                 'trail_name': trail_name,
-                'landmark_name': name
+                'landmark_name': name,
+                'permalink': hrp_permalink
             }
+            
+            # Use HRP Permalink as address for clickable link, fallback to "View on map" if not available
+            address = hrp_permalink if hrp_permalink else f"https://www.google.com/maps?q={lat},{lon}"
             
             return Location(
                 id=location_id,
                 name=name,
                 location_type=location_type,
                 coordinates=(lon, lat),
-                address=None,  # KML doesn't have structured addresses
+                address=address,  # Clickable link to heritage trail information
                 description=f"Heritage trail: {name} (Part of {trail_name})" if trail_name else f"Heritage trail: {name}",
                 metadata=metadata
             )
@@ -419,3 +456,41 @@ class DataProcessor:
             return f"Heritage trail: {name} (Part of {trail_name})" if trail_name else f"Heritage trail: {name}"
         else:
             return f"{location_type.title()} location in Singapore"
+    
+    def _extract_date_vibe(self, properties: Dict, location_type: str) -> List[str]:
+        """Extract category from URL and map to compatible date types"""
+        # Food locations are compatible with all date types
+        if location_type == "food":
+            return ['casual', 'romantic', 'adventurous', 'cultural']
+        
+        # For attractions, extract category from URL_PATH
+        if 'Description' in properties:
+            category = self._extract_category_from_url(properties['Description'])
+            if category:
+                # Map category to date vibes
+                date_vibes = self.CATEGORY_TO_DATE_VIBE.get(category, [])
+                if date_vibes:
+                    return date_vibes
+        
+        # Default: compatible with all date types (fallback for activities, heritage, unknown)
+        return ['casual', 'romantic', 'adventurous', 'cultural']
+    
+    def _extract_category_from_url(self, html_description: str) -> Optional[str]:
+        """Extract main category from URL_PATH in HTML description"""
+        try:
+            import re
+            
+            # Extract URL_PATH from HTML table
+            url_match = re.search(r'<th>URL_PATH</th>\s*<td>([^<]+)</td>', html_description)
+            if url_match:
+                url = url_match.group(1)
+                
+                # Extract category from URL structure
+                # Pattern: www.yoursingapore.com/en/see-do-singapore/{CATEGORY}/...
+                category_match = re.search(r'see-do-singapore/([^/]+)/', url)
+                if category_match:
+                    return category_match.group(1)  # Returns: 'arts', 'culture-heritage', etc.
+        except Exception as e:
+            pass
+        
+        return None
