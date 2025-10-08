@@ -260,12 +260,59 @@ Each tourist attraction is automatically assigned compatible date vibes based on
 
 ### **Date Type Characteristics Summary:**
 
-| Date Type       | Food Re-Ranking Query (RAG Semantic)                                                                  | Activity Priority (Vibe-Based)                                                   | Expected Venues                                                         | Max Sports |
-| --------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------- |
-| **Casual**      | "casual relaxed friendly comfortable laid-back bistro cafe food court family-friendly"                | **1. Casual-vibe attractions** <br> **2. Fallback attractions**                  | Bistros, cafes, casual restaurants, shopping, city viewpoints           | 1          |
-| **Romantic**    | "romantic intimate cozy candlelit elegant fine dining rooftop waterfront scenic wine couple-friendly" | **1. Romantic-vibe attractions** <br> **2. Fallback attractions**                | Fine dining, rooftop bars, waterfront, arts venues, architecture        | 1          |
-| **Adventurous** | "outdoor adventure unique fusion experimental street food hawker food market outdoor seating"         | **1. Sports (max 1)** <br> **2. Adventurous-vibe walks** <br> **3. Fallback**    | Hawker centers, fusion food, tennis/swimming, nature walks, theme parks | 1          |
-| **Cultural**    | "traditional heritage cultural authentic peranakan historical traditional ambiance art cafe"          | **1. Heritage sites** <br> **2. Cultural-vibe attractions** <br> **3. Fallback** | Peranakan food, traditional cuisine, museums, temples, heritage trails  | 1          |
+| Date Type       | Food Re-Ranking Query (RAG Semantic)                                                                  | Activity Priority (Vibe-Based)                                                   | Expected Venues                                                         | Max Sports | Special Exclusions                                        |
+| --------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------- | --------------------------------------------------------- |
+| **Casual**      | "casual relaxed friendly comfortable laid-back bistro cafe food court family-friendly"                | **1. Casual-vibe attractions** <br> **2. Fallback attractions**                  | Bistros, cafes, casual restaurants, shopping, city viewpoints           | 1          | None                                                      |
+| **Romantic**    | "romantic intimate cozy candlelit elegant fine dining rooftop waterfront scenic wine couple-friendly" | **1. Romantic-vibe attractions** <br> **2. Fallback attractions**                | Fine dining, rooftop bars, waterfront, arts venues, architecture        | 1          | **🚫 Zoo, River Safari, Night Safari, Wildlife Reserves** |
+| **Adventurous** | "outdoor adventure unique fusion experimental street food hawker food market outdoor seating"         | **1. Sports (max 1)** <br> **2. Adventurous-vibe walks** <br> **3. Fallback**    | Hawker centers, fusion food, tennis/swimming, nature walks, theme parks | 1          | None                                                      |
+| **Cultural**    | "traditional heritage cultural authentic peranakan historical traditional ambiance art cafe"          | **1. Heritage sites** <br> **2. Cultural-vibe attractions** <br> **3. Fallback** | Peranakan food, traditional cuisine, museums, temples, heritage trails  | 1          | None                                                      |
+
+### **🚫 Hard Blocks for Romantic Dates:**
+
+**Zoo and Safari attractions are completely excluded from romantic dates:**
+
+```python
+# Romantic dates: HARD BLOCK zoo and river safari (not romantic at all!)
+if date_type == 'romantic':
+    zoo_exclusions = ['zoo', 'river safari', 'river wonders', 'wildlife reserve', 'night safari']
+    # These attractions will NEVER appear in romantic date plans
+```
+
+**Why?** Zoos and safari parks are family-oriented, not romantic. They feature:
+
+- Crowds of children and families
+- Animal smells and sounds
+- Educational focus rather than intimate atmosphere
+- Not conducive to romantic conversation
+
+**Better alternatives for romantic dates:**
+
+- Gardens by the Bay (scenic, romantic lighting)
+- Singapore Flyer (private capsules, views)
+- Marina Bay waterfront walks (sunset views)
+- Art museums (quiet, cultural)
+- Rooftop bars (intimate, scenic)
+
+### **🔄 Zoo/Safari Deduplication:**
+
+**If one zoo/safari attraction is suggested, the others are excluded:**
+
+```python
+# DEDUPLICATION: If zoo or river safari already used, exclude the other
+zoo_safari_keywords = ['singapore zoo', 'river safari', 'river wonders', 'night safari', 'wildlife reserves singapore']
+```
+
+**Why?** All these attractions are:
+
+- Part of the same Wildlife Reserves Singapore complex
+- Very similar experiences (wildlife viewing)
+- Located in the same area (Mandai)
+- Would make for a repetitive date
+
+**Example:**
+
+- ✅ Singapore Zoo + Gardens by the Bay (diverse experiences)
+- ❌ Singapore Zoo + River Safari (too similar, both wildlife)
 
 **How Re-Ranking Works:**
 
@@ -291,6 +338,73 @@ The system calculates **realistic travel time** between locations:
 - 0.5 km away → **6 minutes** (minimum)
 - 15 km away → **30 minutes**
 - 45 km away → **1 hour** (maximum)
+
+### **⚠️ CRITICAL: Travel Time Accounting**
+
+**The system now properly accounts for travel time when planning activities to prevent exceeding end time:**
+
+1. **Calculate travel time FIRST** (before setting activity duration)
+2. **Adjust duration** based on `available_time = time_remaining - travel_time`
+3. **Ensure total time** (travel + activity) never exceeds remaining time
+
+**Why this matters:**
+
+- **OLD BEHAVIOR** ❌: Plan 2-hour meal with 2 hours remaining → Add 0.5h travel → Total 2.5h (exceeds!)
+- **NEW BEHAVIOR** ✅: Calculate 0.5h travel first → Adjust meal to 1.5h → Total 2.0h (fits!)
+
+**This fix was applied to both:**
+
+- `_plan_next_meal()` - Ensures meals respect time limits including travel
+- `_plan_next_activity_only()` - Ensures activities respect time limits including travel
+
+### **🐛 CRITICAL BUG FIX: Time Difference Calculation**
+
+**Fixed a major bug where 8-hour dates were planning 14+ hours of activities:**
+
+**Root Cause:** The `_time_difference()` function was treating ANY backward time difference as an overnight date:
+
+- Activity ends at 20:00, date ends at 18:00
+- OLD: `_time_difference('20:00', '18:00')` returned **+22 hours** (assumed 18:00 next day)
+- This caused the loop to continue planning activities way past the end time!
+
+**The Fix:** Only treat as overnight if backward difference >= 12 hours:
+
+```python
+# Only treat as overnight if:
+# 1. End time is before start time (negative difference)
+# 2. The backward difference is >= 12 hours (indicates genuine overnight)
+if same_day_diff < 0 and abs(same_day_diff) >= 12 * 60:
+    # Genuine overnight: 22:00 -> 06:00 = +8 hours (next day)
+    # Also handles: 23:00 -> 11:00 = +12 hours (exactly 12h overnight)
+    end_total_min += 24 * 60
+else:
+    # Same day: 20:00 -> 18:00 = -2 hours (already passed)
+    return same_day_diff / 60.0  # Can be negative!
+```
+
+**Test Results:**
+
+- **BEFORE (bug)**: 8-hour date → 10 activities, 14.4 hours total ❌
+- **AFTER (fixed)**: 8-hour date → 6 activities, 7.5 hours total ✅
+
+**Edge Cases Verified:**
+
+| Start Time | End Time | Type            | Expected | Result | Status |
+| ---------- | -------- | --------------- | -------- | ------ | ------ |
+| 23:00      | 01:00    | Overnight (2h)  | +2.0h    | +2.0h  | ✅     |
+| 22:00      | 06:00    | Overnight (8h)  | +8.0h    | +8.0h  | ✅     |
+| 22:00      | 10:00    | Overnight (12h) | +12.0h   | +12.0h | ✅     |
+| 10:00      | 22:00    | Same-day (12h)  | +12.0h   | +12.0h | ✅     |
+| 10:00      | 18:00    | Same-day (8h)   | +8.0h    | +8.0h  | ✅     |
+| 20:00      | 18:00    | Same-day (-2h)  | -2.0h    | -2.0h  | ✅     |
+
+**This ensures:**
+
+- ✅ Dates respect their end time (no 14-hour plans for 8-hour dates!)
+- ✅ Overnight dates work correctly (23:00 to 01:00 = 2 hours)
+- ✅ 12-hour overnight dates work (23:00 to 11:00 = 12 hours)
+- ✅ Same-day dates don't plan too many activities
+- ✅ Negative time differences correctly stop the planning loop
 
 ### **Timing Format:**
 
