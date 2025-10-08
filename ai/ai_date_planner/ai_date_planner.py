@@ -332,6 +332,12 @@ class AIDatePlanner:
         name_lower = location.name.lower()
         desc_lower = (location.description or '').lower()
         
+        # Romantic dates: HARD BLOCK zoo and river safari (not romantic at all!)
+        if date_type == 'romantic':
+            zoo_exclusions = ['zoo', 'river safari', 'river wonders', 'wildlife reserve', 'night safari']
+            if any(keyword in name_lower or keyword in desc_lower for keyword in zoo_exclusions):
+                return False
+        
         # Romantic and cultural dates exclude child-focused venues
         if date_type in ['romantic', 'cultural']:
             child_exclusions = ['kids', 'children', 'junior', 'playground', 'family fun', 'family entertainment']
@@ -504,10 +510,6 @@ class AIDatePlanner:
         else:
             return None  # Don't plan duplicate meal types
         
-        # Adjust meal duration if not enough time remaining
-        if duration > time_remaining:
-            duration = max(0.5, time_remaining)  # Minimum 30 minutes for any meal
-        
         # Get food location (avoid duplicates, prefer cafes for coffee breaks)
         used_location_ids = set()
         for a in existing_itinerary:
@@ -598,13 +600,21 @@ class AIDatePlanner:
         else:
                     food_location = meal_appropriate_food[min(food_index, len(meal_appropriate_food) - 1)]
         
-        # Add travel time if there are previous activities
+        # Calculate travel time FIRST (before adjusting duration)
         start_time = current_time
+        travel_time = 0.0
         if existing_itinerary:
             last_location = existing_itinerary[-1].get('location_obj')
             if last_location:
                 travel_time = self._calculate_travel_time(last_location, food_location)
                 start_time = self._add_hours(current_time, travel_time)
+        
+        # Adjust meal duration to account for travel time AND remaining time
+        # Available time = time_remaining - travel_time
+        available_time = time_remaining - travel_time
+        if duration > available_time:
+            duration = max(0.5, available_time)  # Minimum 30 minutes for any meal
+            print(f"  ⏱️ Adjusted {meal_type} duration to {duration:.1f}h (travel: {travel_time:.1f}h, available: {available_time:.1f}h)")
         
         end_time = self._add_hours(start_time, duration)
         
@@ -652,13 +662,31 @@ class AIDatePlanner:
         available_attractions = [loc for loc in location_groups.get('attraction', []) if loc.id not in used_location_ids]
         available_heritage = [loc for loc in location_groups.get('heritage', []) if loc.id not in used_location_ids]
         
+        # Apply date type filter to attractions (e.g., exclude zoo/river safari for romantic dates)
+        available_attractions = [loc for loc in available_attractions if self._is_appropriate_for_date_type(loc, date_type)]
+        
+        # DEDUPLICATION: If zoo or river safari already used, exclude the other
+        zoo_safari_keywords = ['singapore zoo', 'river safari', 'river wonders', 'night safari', 'wildlife reserves singapore']
+        has_zoo_or_safari = any(
+            any(keyword in a.get('location', '').lower() for keyword in zoo_safari_keywords)
+            for a in existing_itinerary if isinstance(a, dict)
+        )
+        
+        if has_zoo_or_safari:
+            # Filter out all zoo/safari attractions
+            available_attractions = [
+                loc for loc in available_attractions 
+                if not any(keyword in loc.name.lower() for keyword in zoo_safari_keywords)
+            ]
+            print(f"  🚫 Zoo/Safari deduplication: Excluded similar attractions (one already planned)")
+        
         # For very long dates (12+ hours), allow location reuse if we run out of new locations
         duration = preferences.get_duration_hours()
         if duration >= 12.0 and not available_activities and not available_attractions and not available_heritage:
             print(f"  🔄 Long date ({duration:.1f}h): Allowing location reuse for activities")
-            # Allow reuse - just use all locations again
+            # Allow reuse - just use all locations again (but still apply date type filter)
             available_activities = location_groups.get('activity', [])
-            available_attractions = location_groups.get('attraction', [])
+            available_attractions = [loc for loc in location_groups.get('attraction', []) if self._is_appropriate_for_date_type(loc, date_type)]
             available_heritage = location_groups.get('heritage', [])
         
         # Choose activity type based on date type preferences, time, and what's available
@@ -794,13 +822,21 @@ class AIDatePlanner:
         if location is None:
             return None
         
-        # Add travel time if there are previous activities
+        # Calculate travel time FIRST (before finalizing duration)
         start_time = current_time
+        travel_time = 0.0
         if existing_itinerary:
             last_location = existing_itinerary[-1].get('location_obj')
             if last_location:
                 travel_time = self._calculate_travel_time(last_location, location)
                 start_time = self._add_hours(current_time, travel_time)
+        
+        # Adjust activity duration to account for travel time AND remaining time
+        # Available time = time_remaining - travel_time
+        available_time = time_remaining - travel_time
+        if activity_duration > available_time:
+            activity_duration = max(0.5, available_time)  # Minimum 30 minutes for any activity
+            print(f"  ⏱️ Adjusted activity duration to {activity_duration:.1f}h (travel: {travel_time:.1f}h, available: {available_time:.1f}h)")
         
         end_time = self._add_hours(start_time, activity_duration)
         
@@ -1072,18 +1108,33 @@ class AIDatePlanner:
         }
     
     def _time_difference(self, start_time: str, end_time: str) -> float:
-        """Calculate time difference in hours between two time strings"""
+        """
+        Calculate time difference in hours between two time strings.
+        Returns positive if end_time is after start_time, negative if before.
+        
+        For overnight dates, only treats as next day if difference would be > 12 hours backward.
+        This prevents false positives like 20:00 to 18:00 being treated as overnight.
+        """
         start_hour, start_min = map(int, start_time.split(':'))
         end_hour, end_min = map(int, end_time.split(':'))
         
         start_total_min = start_hour * 60 + start_min
         end_total_min = end_hour * 60 + end_min
         
-        # Handle overnight times (end time next day or same time next day)
-        if end_total_min <= start_total_min:
-            end_total_min += 24 * 60
+        # Calculate same-day difference first
+        same_day_diff = end_total_min - start_total_min
         
-        return (end_total_min - start_total_min) / 60.0
+        # Only treat as overnight if:
+        # 1. End time is before start time (negative difference)
+        # 2. The backward difference is >= 12 hours (indicates genuine overnight)
+        # This prevents 20:00 -> 18:00 (-2h) from being treated as overnight (+22h)
+        if same_day_diff < 0 and abs(same_day_diff) >= 12 * 60:
+            # Genuine overnight: add 24 hours to end time
+            end_total_min += 24 * 60
+            return (end_total_min - start_total_min) / 60.0
+        else:
+            # Same day or small backward difference: return as-is (can be negative)
+            return same_day_diff / 60.0
     
     def _time_after_or_equal(self, time1: str, time2: str) -> bool:
         """Check if time1 is after or equal to time2 (same day)"""
