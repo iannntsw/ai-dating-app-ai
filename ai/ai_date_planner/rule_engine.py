@@ -50,8 +50,8 @@ class UserPreferences:
             start_minutes = start_hour * 60 + start_min
             end_minutes = end_hour * 60 + end_min
             
-            # Handle overnight dates (end time next day)
-            if end_minutes < start_minutes:
+            # Handle overnight dates (end time next day or same time next day)
+            if end_minutes <= start_minutes:
                 end_minutes += 24 * 60  # Add 24 hours
             
             duration_minutes = end_minutes - start_minutes
@@ -129,34 +129,29 @@ class RuleEngine:
         filter_stats = {}
         excluded_count = 0
         
-        # STEP 1: Apply exclusions FIRST (before interests)
+        # STEP 1: Apply exclusions (what user does NOT want)
         if exclusions:
             filtered_locations, excluded = self._filter_by_exclusions(filtered_locations, exclusions)
             excluded_count += excluded
             filter_stats['exclusions'] = {'excluded': excluded, 'remaining': len(filtered_locations)}
         
-        # STEP 2: Apply interests filter (works on already-excluded set)
-        filtered_locations, excluded = self._filter_by_interests(filtered_locations, preferences.interests)
-        excluded_count += excluded
-        filter_stats['interests'] = {'excluded': excluded, 'remaining': len(filtered_locations)}
-        
+        # STEP 2: Apply budget filter (only applies to food)
         filtered_locations, excluded = self._filter_by_budget(filtered_locations, preferences.budget_tier)
         excluded_count += excluded
         filter_stats['budget'] = {'excluded': excluded, 'remaining': len(filtered_locations)}
         
-        # Make time and date type filters more lenient - they should be suggestions, not strict filters
-        filtered_locations, excluded = self._filter_by_time_preference(filtered_locations, preferences.time_of_day)
-        excluded_count += excluded
-        filter_stats['time'] = {'excluded': excluded, 'remaining': len(filtered_locations)}
-        
-        filtered_locations, excluded = self._filter_by_date_type(filtered_locations, preferences.date_type)
-        excluded_count += excluded
-        filter_stats['date_type'] = {'excluded': excluded, 'remaining': len(filtered_locations)}
+        # NOTE: Interest, time, and date type filters removed - they were too lenient and filtered nothing
+        # Instead, we rely on:
+        # - RAG semantic search for relevance matching
+        # - Date-vibe system for attraction matching
+        # - Food re-ranking for meal type matching
+        # - Activity prioritization for date type preferences
         
         # Calculate proximity scores (no filtering, just scoring)
         location_scores = self._calculate_proximity_scores(filtered_locations, preferences)
         
         print(f"Filtering complete: {len(filtered_locations)} locations remaining ({excluded_count} excluded)")
+        print(f"  Note: Interest/time/date-type matching handled by RAG and date-vibe system")
         
         return FilterResult(
             filtered_locations=filtered_locations,

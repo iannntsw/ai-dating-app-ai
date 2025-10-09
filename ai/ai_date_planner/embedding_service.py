@@ -77,6 +77,11 @@ class EmbeddingService:
         # Add location type
         text_parts.append(location.location_type)
         
+        # Add date vibe (compatible date types)
+        if location.date_vibe:
+            vibe_text = " ".join(location.date_vibe)
+            text_parts.append(f"suitable for {vibe_text} dates")
+        
         # Add description
         if location.description:
             text_parts.append(location.description)

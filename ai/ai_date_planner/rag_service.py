@@ -24,7 +24,7 @@ class RAGService:
     def __init__(self, embedding_service: EmbeddingService):
         """Initialize RAG service with embedding service"""
         self.embedding_service = embedding_service
-        self.max_results = 100  # Maximum locations to return for better variety
+        self.max_results = 70  # Maximum locations to return (more focused results)
     
     def find_relevant_locations(self, filter_result: FilterResult, preferences: UserPreferences) -> RAGResult:
         """
@@ -220,15 +220,15 @@ class RAGService:
     
     def _rank_locations(self, locations: List[Location], relevance_scores: Dict[str, float], proximity_scores: Dict[str, float]) -> List[Location]:
         """Rank locations by combined relevance and proximity scores"""
-        # Combine relevance (70%) and proximity (30%) scores - prioritize semantic match over distance
+        # Combine relevance (60%) and proximity (40%) scores - balance semantic match with proximity
         combined_scores = {}
         
         for location in locations:
             relevance = relevance_scores.get(location.id, 0.0)
             proximity = proximity_scores.get(location.id, 0.0)
             
-            # Weighted combination: 70% semantic relevance, 30% proximity
-            combined_score = 0.7 * relevance + 0.3 * proximity
+            # Weighted combination: 60% semantic relevance, 40% proximity (prioritize proximity)
+            combined_score = 0.6 * relevance + 0.4 * proximity
             combined_scores[location.id] = combined_score
         
         # Sort by combined score (descending)

@@ -166,20 +166,16 @@ non_breakfast_keywords = [
 
 ### **Rule-Based Filtering (Step 1)**
 
-1. **Exclusion Filter (First Priority)** - Removes excluded activity types:
+**Active Filters:**
+
+1. **Exclusion Filter** - Removes user-selected exclusions (max 2):
 
    - Checks location name/description against exclusion keywords
    - **NEVER excludes food locations** (meals required)
-   - Processed before all other filters
+   - Processed first for efficiency
+   - Options: Sports, Cultural, Nature
 
-2. **Interest Filter** - Matches user interests:
-
-   - If no interests specified, includes all locations
-   - If interests specified, only includes matching locations
-   - **Exception**: Food locations always included for meals
-   - **Enhancement**: General attractions allowed if they don't match exclusions
-
-3. **Budget Filter** - **ONLY applies to food locations:**
+2. **Budget Filter** - **ONLY applies to food locations:**
 
    - **Food locations**: Filtered by budget tier keywords (`upscale`, `premium`, `luxury`, etc.)
    - **Cafes/Coffee shops**: ALWAYS kept regardless of budget (needed for breakfast/coffee)
@@ -190,21 +186,22 @@ non_breakfast_keywords = [
      - `$$$`: `upscale`, `fine dining`, `premium`, `luxury`
    - **Cafe keywords (always kept)**: `cafe`, `coffee`, `kopi`, `bistro`, `bakery`, `patisserie`, `espresso`, `starbucks`, `toast`
 
-4. **Time Filter** - Very lenient - only excludes locations that explicitly conflict
+**Removed Filters** (replaced by smarter systems):
 
-5. **Date Type Filter** - Enhanced for romantic dates:
-   - **Romantic**: Excludes child-focused venues
-   - **Cultural**: Excludes child-focused venues
-   - All types: Age-appropriate filtering
+- ~~Interest Filter~~ → Now handled by **RAG semantic search** (finds relevant locations based on interests)
+- ~~Time Filter~~ → Now handled by **meal-time planning logic** (plans appropriate meals based on time windows)
+- ~~Date Type Filter~~ → Now handled by **date-vibe system** + **food re-ranking** + **activity prioritization**
+
+**Why removed?** These filters were too lenient and excluded 0 locations. The new systems are more effective!
 
 ### **RAG-Based Relevance (Step 2)**
 
 - Uses **FAISS index** for fast semantic similarity search (k=200)
 - **Graceful fallback** to cosine similarity if FAISS unavailable
-- Combines **70% semantic relevance** + **30% proximity score** (prioritizes quality over convenience)
-- Returns top **100** most relevant locations via diversity sampling
-- **Diversity sampling**: Ensures 70 food + 10 attractions + 10 activities + 10 heritage minimum
-- **Why?** Prevents RAG from returning 99 food + 1 attraction (was happening before)
+- Combines **60% semantic relevance** + **40% proximity score** (balances quality with convenience)
+- Returns top **70** most relevant locations via diversity sampling (more focused results)
+- **Diversity sampling**: Ensures 40 food + 10 attractions + 6 activities + 5 heritage minimum
+- **Why?** Prevents RAG from returning 69 food + 1 attraction, ensures variety while staying focused
 
 ### **Date Type Differentiation (3-Layer System)**
 
@@ -227,14 +224,95 @@ The system uses **THREE layers** to differentiate date types:
 - Cultural → Prioritizes heritage sites + museums
 - Romantic/Casual → Standard RAG-driven selection
 
+### **Date Vibe Category System:**
+
+Each tourist attraction is automatically assigned compatible date vibes based on its category:
+
+| **Category**           | **Date Vibes**             | **Count** | **Examples**                                   |
+| ---------------------- | -------------------------- | --------- | ---------------------------------------------- |
+| **places-to-see**      | Casual, Adventurous        | 13        | Fort Canning Park, Marina Bay Sands SkyPark    |
+| **recreation-leisure** | Casual, Romantic           | 6         | Singapore Flyer, Gardens by the Bay            |
+| **architecture**       | Casual, Romantic, Cultural | 20        | CHIJMES, National Gallery, Fullerton Hotel     |
+| **nature-wildlife**    | Adventurous                | 19        | MacRitchie Reservoir, Sentosa Nature Walk      |
+| **arts**               | Romantic                   | 13        | ArtScience Museum, Lasalle College of the Arts |
+| **adventure-leisure**  | Adventurous                | 2         | Universal Studios, Adventure Cove Waterpark    |
+| **culture-heritage**   | Cultural                   | 17        | Thian Hock Keng Temple, Malay Heritage Centre  |
+| **history**            | Cultural                   | 18        | Fort Siloso, Battle Box Museum                 |
+| **Sports Facilities**  | All (Fallback)             | 35        | Swimming complexes, stadiums, tennis centers   |
+| **Heritage Trails**    | All (Fallback)             | 19        | Civic District Trail, Chinatown Trail          |
+| **Food Locations**     | All (Always Compatible)    | 31,473    | All restaurants, cafes, hawker centers         |
+
+**🎯 Date Type Coverage (Attractions Only):**
+
+| **Date Type**   | **Matching Categories**                           | **Total Attractions** |
+| --------------- | ------------------------------------------------- | --------------------- |
+| **Casual**      | places-to-see, recreation-leisure, architecture   | 39 attractions        |
+| **Romantic**    | architecture, recreation-leisure, arts            | 39 attractions        |
+| **Adventurous** | nature-wildlife, places-to-see, adventure-leisure | 34 attractions        |
+| **Cultural**    | culture-heritage, history, architecture           | 55 attractions        |
+
+**📝 Notes:**
+
+- Sports facilities (35) and heritage trails (19) have **NO date_vibe** → Act as fallback for all date types
+- Food locations (31,473) are **ALWAYS compatible** with all date types (never filtered by vibe)
+- Total tourist attractions: **109** (with date_vibe categorization)
+- Fallback mechanism ensures locations without categories can still appear in any date type
+
 ### **Date Type Characteristics Summary:**
 
-| Date Type       | Food Re-Ranking Query (RAG Semantic)                                                                  | Activity Priority                                   | Expected Venues                                                        | Max Sports |
-| --------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- | ---------- |
-| **Casual**      | "casual relaxed friendly comfortable laid-back bistro cafe food court family-friendly"                | Standard flow                                       | Bistros, cafes, casual restaurants, shopping                           | 1          |
-| **Romantic**    | "romantic intimate cozy candlelit elegant fine dining rooftop waterfront scenic wine couple-friendly" | Standard flow                                       | Fine dining, rooftop bars, waterfront, scenic walks                    | 1          |
-| **Adventurous** | "outdoor adventure unique fusion experimental street food hawker food market outdoor seating"         | **1. Sports (max 1)** <br> **2. Nature walks**      | Hawker centers, fusion food, tennis/swimming + nature walks            | 1          |
-| **Cultural**    | "traditional heritage cultural authentic peranakan historical traditional ambiance art cafe"          | **1. Heritage sites** <br> **2. Museums/galleries** | Peranakan food, traditional cuisine, museums, temples, heritage trails | 1          |
+| Date Type       | Food Re-Ranking Query (RAG Semantic)                                                                  | Activity Priority (Vibe-Based)                                                   | Expected Venues                                                         | Max Sports | Special Exclusions                                        |
+| --------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------- | --------------------------------------------------------- |
+| **Casual**      | "casual relaxed friendly comfortable laid-back bistro cafe food court family-friendly"                | **1. Casual-vibe attractions** <br> **2. Fallback attractions**                  | Bistros, cafes, casual restaurants, shopping, city viewpoints           | 1          | None                                                      |
+| **Romantic**    | "romantic intimate cozy candlelit elegant fine dining rooftop waterfront scenic wine couple-friendly" | **1. Romantic-vibe attractions** <br> **2. Fallback attractions**                | Fine dining, rooftop bars, waterfront, arts venues, architecture        | 1          | **🚫 Zoo, River Safari, Night Safari, Wildlife Reserves** |
+| **Adventurous** | "outdoor adventure unique fusion experimental street food hawker food market outdoor seating"         | **1. Sports (max 1)** <br> **2. Adventurous-vibe walks** <br> **3. Fallback**    | Hawker centers, fusion food, tennis/swimming, nature walks, theme parks | 1          | None                                                      |
+| **Cultural**    | "traditional heritage cultural authentic peranakan historical traditional ambiance art cafe"          | **1. Heritage sites** <br> **2. Cultural-vibe attractions** <br> **3. Fallback** | Peranakan food, traditional cuisine, museums, temples, heritage trails  | 1          | None                                                      |
+
+### **🚫 Hard Blocks for Romantic Dates:**
+
+**Zoo and Safari attractions are completely excluded from romantic dates:**
+
+```python
+# Romantic dates: HARD BLOCK zoo and river safari (not romantic at all!)
+if date_type == 'romantic':
+    zoo_exclusions = ['zoo', 'river safari', 'river wonders', 'wildlife reserve', 'night safari']
+    # These attractions will NEVER appear in romantic date plans
+```
+
+**Why?** Zoos and safari parks are family-oriented, not romantic. They feature:
+
+- Crowds of children and families
+- Animal smells and sounds
+- Educational focus rather than intimate atmosphere
+- Not conducive to romantic conversation
+
+**Better alternatives for romantic dates:**
+
+- Gardens by the Bay (scenic, romantic lighting)
+- Singapore Flyer (private capsules, views)
+- Marina Bay waterfront walks (sunset views)
+- Art museums (quiet, cultural)
+- Rooftop bars (intimate, scenic)
+
+### **🔄 Zoo/Safari Deduplication:**
+
+**If one zoo/safari attraction is suggested, the others are excluded:**
+
+```python
+# DEDUPLICATION: If zoo or river safari already used, exclude the other
+zoo_safari_keywords = ['singapore zoo', 'river safari', 'river wonders', 'night safari', 'wildlife reserves singapore']
+```
+
+**Why?** All these attractions are:
+
+- Part of the same Wildlife Reserves Singapore complex
+- Very similar experiences (wildlife viewing)
+- Located in the same area (Mandai)
+- Would make for a repetitive date
+
+**Example:**
+
+- ✅ Singapore Zoo + Gardens by the Bay (diverse experiences)
+- ❌ Singapore Zoo + River Safari (too similar, both wildlife)
 
 **How Re-Ranking Works:**
 
@@ -260,6 +338,73 @@ The system calculates **realistic travel time** between locations:
 - 0.5 km away → **6 minutes** (minimum)
 - 15 km away → **30 minutes**
 - 45 km away → **1 hour** (maximum)
+
+### **⚠️ CRITICAL: Travel Time Accounting**
+
+**The system now properly accounts for travel time when planning activities to prevent exceeding end time:**
+
+1. **Calculate travel time FIRST** (before setting activity duration)
+2. **Adjust duration** based on `available_time = time_remaining - travel_time`
+3. **Ensure total time** (travel + activity) never exceeds remaining time
+
+**Why this matters:**
+
+- **OLD BEHAVIOR** ❌: Plan 2-hour meal with 2 hours remaining → Add 0.5h travel → Total 2.5h (exceeds!)
+- **NEW BEHAVIOR** ✅: Calculate 0.5h travel first → Adjust meal to 1.5h → Total 2.0h (fits!)
+
+**This fix was applied to both:**
+
+- `_plan_next_meal()` - Ensures meals respect time limits including travel
+- `_plan_next_activity_only()` - Ensures activities respect time limits including travel
+
+### **🐛 CRITICAL BUG FIX: Time Difference Calculation**
+
+**Fixed a major bug where 8-hour dates were planning 14+ hours of activities:**
+
+**Root Cause:** The `_time_difference()` function was treating ANY backward time difference as an overnight date:
+
+- Activity ends at 20:00, date ends at 18:00
+- OLD: `_time_difference('20:00', '18:00')` returned **+22 hours** (assumed 18:00 next day)
+- This caused the loop to continue planning activities way past the end time!
+
+**The Fix:** Only treat as overnight if backward difference >= 12 hours:
+
+```python
+# Only treat as overnight if:
+# 1. End time is before start time (negative difference)
+# 2. The backward difference is >= 12 hours (indicates genuine overnight)
+if same_day_diff < 0 and abs(same_day_diff) >= 12 * 60:
+    # Genuine overnight: 22:00 -> 06:00 = +8 hours (next day)
+    # Also handles: 23:00 -> 11:00 = +12 hours (exactly 12h overnight)
+    end_total_min += 24 * 60
+else:
+    # Same day: 20:00 -> 18:00 = -2 hours (already passed)
+    return same_day_diff / 60.0  # Can be negative!
+```
+
+**Test Results:**
+
+- **BEFORE (bug)**: 8-hour date → 10 activities, 14.4 hours total ❌
+- **AFTER (fixed)**: 8-hour date → 6 activities, 7.5 hours total ✅
+
+**Edge Cases Verified:**
+
+| Start Time | End Time | Type            | Expected | Result | Status |
+| ---------- | -------- | --------------- | -------- | ------ | ------ |
+| 23:00      | 01:00    | Overnight (2h)  | +2.0h    | +2.0h  | ✅     |
+| 22:00      | 06:00    | Overnight (8h)  | +8.0h    | +8.0h  | ✅     |
+| 22:00      | 10:00    | Overnight (12h) | +12.0h   | +12.0h | ✅     |
+| 10:00      | 22:00    | Same-day (12h)  | +12.0h   | +12.0h | ✅     |
+| 10:00      | 18:00    | Same-day (8h)   | +8.0h    | +8.0h  | ✅     |
+| 20:00      | 18:00    | Same-day (-2h)  | -2.0h    | -2.0h  | ✅     |
+
+**This ensures:**
+
+- ✅ Dates respect their end time (no 14-hour plans for 8-hour dates!)
+- ✅ Overnight dates work correctly (23:00 to 01:00 = 2 hours)
+- ✅ 12-hour overnight dates work (23:00 to 11:00 = 12 hours)
+- ✅ Same-day dates don't plan too many activities
+- ✅ Negative time differences correctly stop the planning loop
 
 ### **Timing Format:**
 
@@ -443,11 +588,11 @@ def _get_attraction_activity_type(location, exclude_nature, exclude_cultural):
 
 **Expected Output:**
 
-- Breakfast at cafe ($10) - Not Toast Box/Ya Kun (reserved for breakfast only)
+- Breakfast at cafe ($10) - Allows Starbucks, Coffee Bean, Ya Kun, Toast Box, etc.
 - Morning activity (shopping, walk, or cultural - based on date type)
-- Lunch at restaurant ($16-32) - Not breakfast-only places
+- Lunch at restaurant ($16-32) - **Excludes** coffee shops (Starbucks, Coffee Bean) and breakfast-only places (Ya Kun, Toast Box)
 - Afternoon activity (based on date type priority)
-- Coffee break at cafe ($10)
+- Coffee break at cafe ($10) - Allows Starbucks, Coffee Bean, etc.
 - Evening activity (final activity may be extended to hit 75% coverage)
 - Dinner at restaurant ($20-40) - Date type appropriate
 - Total: 8 hours, $56-92 per person (only food costs, activities free)

@@ -153,35 +153,49 @@ class AIDatePlanner:
         if time_usage_percentage < 75 and duration > 2 and len(itinerary) > 0:  # Only enforce for dates > 2 hours
             print(f"⚠️ Low coverage: {time_usage_percentage:.1f}% ({total_activity_time:.1f}/{duration:.1f} hours)")
             
-            # Try to extend the last activity to meet EXACTLY 75% threshold (not 100%)
-            target_time = duration * 0.75  # 75% of requested duration
-            time_needed = target_time - total_activity_time
-            
-            if time_needed > 0 and len(itinerary) > 0:
-                last_activity = itinerary[-1]
+            # For very long dates (12+ hours), relax the 75% requirement
+            # It's unrealistic to fill 18+ hours continuously
+            if duration >= 12.0:
+                required_percentage = max(50, 75 - (duration - 12) * 2)  # Gradually reduce from 75% for long dates
+                print(f"  📏 Long date ({duration:.1f}h): Relaxing coverage requirement to {required_percentage:.0f}%")
                 
-                # Don't extend meals too much, but activities can be extended
-                if last_activity.get('type') != 'food':
-                    print(f"🔧 Extending last activity by {time_needed:.1f} hours to reach 75% coverage ({target_time:.1f}/{duration:.1f} hours)")
-                    last_activity['duration'] += time_needed
-                    last_activity['end_time'] = self._add_hours(last_activity['start_time'], last_activity['duration'])
-                    
-                    # Recalculate coverage
-                    total_activity_time = sum(item.get('duration', 0) for item in itinerary)
-                    time_usage_percentage = (total_activity_time / duration) * 100
-                    print(f"✅ Coverage after extension: {time_usage_percentage:.1f}% ({total_activity_time:.1f}/{duration:.1f} hours)")
+                if time_usage_percentage >= required_percentage:
+                    print(f"✅ Meets relaxed coverage requirement ({time_usage_percentage:.1f}% >= {required_percentage:.0f}%)")
+                    # Skip validation for long dates that meet relaxed requirement
                 else:
-                    # If last activity is food, still raise error
-                    print(f"📊 Debug - Location groups available:")
-                    for loc_type, locs in location_groups.items():
-                        print(f"  - {loc_type}: {len(locs)} locations")
+                    print(f"⚠️ Even relaxed requirement not met ({time_usage_percentage:.1f}% < {required_percentage:.0f}%)")
+                    print(f"  Note: For {duration:.1f}-hour dates, continuous activity planning may not be feasible")
+            else:
+                # For normal dates (< 12 hours), try to extend the last activity to meet 75%
+                target_time = duration * 0.75  # 75% of requested duration
+                time_needed = target_time - total_activity_time
+                
+                if time_needed > 0 and len(itinerary) > 0:
+                    last_activity = itinerary[-1]
                     
-                    raise ValueError(
-                        f"Unable to plan sufficient activities for {duration:.1f} hours. "
-                        f"Only {total_activity_time:.1f} hours of activities available ({time_usage_percentage:.0f}% coverage). "
-                        f"Try: 1) Selecting more interests, 2) Reducing exclusions, 3) Choosing a shorter duration (4-6 hours recommended), "
-                        f"or 4) Selecting a different location with more nearby attractions."
-        )
+                    # Only extend non-food activities, and cap extension at 3 hours
+                    max_extension = 3.0
+                    if last_activity.get('type') != 'food' and time_needed <= max_extension:
+                        print(f"🔧 Extending last activity by {time_needed:.1f} hours to reach 75% coverage ({target_time:.1f}/{duration:.1f} hours)")
+                        last_activity['duration'] += time_needed
+                        last_activity['end_time'] = self._add_hours(last_activity['start_time'], last_activity['duration'])
+                        
+                        # Recalculate coverage
+                        total_activity_time = sum(item.get('duration', 0) for item in itinerary)
+                        time_usage_percentage = (total_activity_time / duration) * 100
+                        print(f"✅ Coverage after extension: {time_usage_percentage:.1f}% ({total_activity_time:.1f}/{duration:.1f} hours)")
+                    else:
+                        # If last activity is food or extension too large, raise error
+                        print(f"📊 Debug - Location groups available:")
+                        for loc_type, locs in location_groups.items():
+                            print(f"  - {loc_type}: {len(locs)} locations")
+                        
+                        raise ValueError(
+                            f"Unable to plan sufficient activities for {duration:.1f} hours. "
+                            f"Only {total_activity_time:.1f} hours of activities available ({time_usage_percentage:.0f}% coverage). "
+                            f"Try: 1) Selecting more interests, 2) Reducing exclusions, 3) Choosing a shorter duration (4-6 hours recommended), "
+                            f"or 4) Selecting a different location with more nearby attractions."
+                )
         
         # Calculate estimated cost
         estimated_cost = self._estimate_cost(itinerary, preferences.budget_tier)
@@ -242,7 +256,10 @@ class AIDatePlanner:
         has_non_food = any(keyword in name_lower for keyword in non_food_keywords)
         
         # Specific exclusions that are never appropriate for meals
-        never_meal_keywords = ['kidzania', 'amazonia', 'wildlife', 'zoo', 'aquarium']
+        never_meal_keywords = [
+            'kidzania', 'amazonia', 'wildlife', 'zoo', 'aquarium',
+            'karaoke', 'ktv', 'k.t.v', 'karoke', 'karoke box'
+        ]
         if any(keyword in name_lower for keyword in never_meal_keywords):
             return False
         
@@ -292,19 +309,21 @@ class AIDatePlanner:
             # Otherwise, be conservative and reject
             return False
         
-        # Special handling for lunch and dinner - EXCLUDE breakfast-only places
+        # Special handling for lunch and dinner - EXCLUDE breakfast-only places and coffee shops
         if meal_type in ['Lunch', 'Dinner', 'Late Dinner']:
-            # Breakfast-only places that should NOT serve lunch/dinner
+            # Breakfast-only places and coffee shops that should NOT serve lunch/dinner
             breakfast_only_keywords = [
                 'ya kun', 'toast box', 'kaya toast', 'killiney', 'wang cafe',
-                'kopitiam', 'yakun', 'toastbox'
+                'kopitiam', 'yakun', 'toastbox', 'starbucks', 'coffee bean', 
+                'the coffee bean', 'coffee bean & tea leaf', 'coffee bean and tea leaf',
+                'starbuck', 'costa coffee', 'coffee shop'
             ]
             is_breakfast_only = any(keyword in name_lower for keyword in breakfast_only_keywords)
             
             if is_breakfast_only:
-                if 'ya kun' in name_lower or 'toast box' in name_lower:
-                    print(f"❌ {location.name}: REJECTED for {meal_type} (breakfast-only establishment)")
-                return False  # Don't serve lunch/dinner at breakfast places
+                if any(keyword in name_lower for keyword in ['ya kun', 'toast box', 'starbucks', 'coffee bean']):
+                    print(f"❌ {location.name}: REJECTED for {meal_type} (breakfast/coffee-only establishment)")
+                return False  # Don't serve lunch/dinner at breakfast places or coffee shops
             
         return True
     
@@ -312,6 +331,12 @@ class AIDatePlanner:
         """Check if location is appropriate for the date type"""
         name_lower = location.name.lower()
         desc_lower = (location.description or '').lower()
+        
+        # Romantic dates: HARD BLOCK zoo and river safari (not romantic at all!)
+        if date_type == 'romantic':
+            zoo_exclusions = ['zoo', 'river safari', 'river wonders', 'wildlife reserve', 'night safari']
+            if any(keyword in name_lower or keyword in desc_lower for keyword in zoo_exclusions):
+                return False
         
         # Romantic and cultural dates exclude child-focused venues
         if date_type in ['romantic', 'cultural']:
@@ -377,14 +402,18 @@ class AIDatePlanner:
         while self._time_difference(current_time, end_time) > 0.5 and activity_count < max_activities:  # At least 30 minutes remaining
             next_activity = self._plan_next_activity(location_groups, current_time, end_time, itinerary, preferences)
             if next_activity:
-                # Check if this activity would exceed the end time
-                if self._time_after_or_equal(next_activity['end_time'], end_time):
-                    # Adjust the activity to end at the end time
+                # Check if this activity would exceed the end time (handles overnight dates correctly)
+                time_left_after_activity = self._time_difference(next_activity['end_time'], end_time)
+                
+                if time_left_after_activity <= 0:
+                    # Activity would go past end time, adjust it to end exactly at end_time
                     next_activity['end_time'] = end_time
                     next_activity['duration'] = self._time_difference(next_activity['start_time'], end_time)
                     itinerary.append(next_activity)
+                    print(f"  🏁 Final activity adjusted to end at {end_time}")
                     break  # Stop planning after this activity
                 else:
+                    # Activity fits within time limit
                     itinerary.append(next_activity)
                     current_time = next_activity['end_time']
                     activity_count += 1
@@ -481,10 +510,6 @@ class AIDatePlanner:
         else:
             return None  # Don't plan duplicate meal types
         
-        # Adjust meal duration if not enough time remaining
-        if duration > time_remaining:
-            duration = max(0.5, time_remaining)  # Minimum 30 minutes for any meal
-        
         # Get food location (avoid duplicates, prefer cafes for coffee breaks)
         used_location_ids = set()
         for a in existing_itinerary:
@@ -575,13 +600,21 @@ class AIDatePlanner:
         else:
                     food_location = meal_appropriate_food[min(food_index, len(meal_appropriate_food) - 1)]
         
-        # Add travel time if there are previous activities
+        # Calculate travel time FIRST (before adjusting duration)
         start_time = current_time
+        travel_time = 0.0
         if existing_itinerary:
             last_location = existing_itinerary[-1].get('location_obj')
             if last_location:
                 travel_time = self._calculate_travel_time(last_location, food_location)
                 start_time = self._add_hours(current_time, travel_time)
+        
+        # Adjust meal duration to account for travel time AND remaining time
+        # Available time = time_remaining - travel_time
+        available_time = time_remaining - travel_time
+        if duration > available_time:
+            duration = max(0.5, available_time)  # Minimum 30 minutes for any meal
+            print(f"  ⏱️ Adjusted {meal_type} duration to {duration:.1f}h (travel: {travel_time:.1f}h, available: {available_time:.1f}h)")
         
         end_time = self._add_hours(start_time, duration)
         
@@ -629,6 +662,33 @@ class AIDatePlanner:
         available_attractions = [loc for loc in location_groups.get('attraction', []) if loc.id not in used_location_ids]
         available_heritage = [loc for loc in location_groups.get('heritage', []) if loc.id not in used_location_ids]
         
+        # Apply date type filter to attractions (e.g., exclude zoo/river safari for romantic dates)
+        available_attractions = [loc for loc in available_attractions if self._is_appropriate_for_date_type(loc, date_type)]
+        
+        # DEDUPLICATION: If zoo or river safari already used, exclude the other
+        zoo_safari_keywords = ['singapore zoo', 'river safari', 'river wonders', 'night safari', 'wildlife reserves singapore']
+        has_zoo_or_safari = any(
+            any(keyword in a.get('location', '').lower() for keyword in zoo_safari_keywords)
+            for a in existing_itinerary if isinstance(a, dict)
+        )
+        
+        if has_zoo_or_safari:
+            # Filter out all zoo/safari attractions
+            available_attractions = [
+                loc for loc in available_attractions 
+                if not any(keyword in loc.name.lower() for keyword in zoo_safari_keywords)
+            ]
+            print(f"  🚫 Zoo/Safari deduplication: Excluded similar attractions (one already planned)")
+        
+        # For very long dates (12+ hours), allow location reuse if we run out of new locations
+        duration = preferences.get_duration_hours()
+        if duration >= 12.0 and not available_activities and not available_attractions and not available_heritage:
+            print(f"  🔄 Long date ({duration:.1f}h): Allowing location reuse for activities")
+            # Allow reuse - just use all locations again (but still apply date type filter)
+            available_activities = location_groups.get('activity', [])
+            available_attractions = [loc for loc in location_groups.get('attraction', []) if self._is_appropriate_for_date_type(loc, date_type)]
+            available_heritage = location_groups.get('heritage', [])
+        
         # Choose activity type based on date type preferences, time, and what's available
         location = None
         activity_duration = 1.0
@@ -639,39 +699,93 @@ class AIDatePlanner:
         # Cultural → prioritize museums/heritage sites and cultural attractions
         # Romantic/Casual → use normal flow
         
+        # Date-type specific prioritization using date_vibe
         if date_type == 'adventurous':
-            # ADVENTUROUS: Prioritize sports/activities first (max 1), then nature attractions
+            # ADVENTUROUS: Prioritize sports/activities first (max 1), then adventurous-vibe attractions
             if location is None and time_remaining >= 2.0 and available_activities and not exclude_sports and sports_count < 1:
+                # Activities don't have date_vibe (fallback), so select first available
                 location = available_activities[0]
                 activity_duration = min(2.0, time_remaining)
                 activity_type = self._get_simple_activity_type(location)
                 print(f"  🏃 Adventurous date: Selected sports activity (1/{1} max)")
             elif location is None and time_remaining >= 1.5 and available_attractions and not exclude_nature:
-                # Look for nature/walk attractions
-                for attraction in available_attractions:
+                # Prioritize attractions with 'adventurous' date_vibe, then fallback to no-vibe locations
+                adventurous_attractions = [loc for loc in available_attractions 
+                                          if loc.date_vibe and 'adventurous' in loc.date_vibe]
+                fallback_attractions = [loc for loc in available_attractions 
+                                       if not loc.date_vibe or len(loc.date_vibe) == 0]
+                
+                # Try adventurous-vibe attractions first
+                for attraction in (adventurous_attractions + fallback_attractions):
                     activity_type = self._get_attraction_activity_type(attraction, exclude_nature, exclude_cultural)
-                    if activity_type == 'Walk':  # Prioritize walks for adventurous
+                    if activity_type == 'Walk':  # Prefer walks for adventurous
                         location = attraction
                         activity_duration = min(2.0, time_remaining)
-                        print(f"  🚶 Adventurous date: Selected nature walk")
+                        vibe_match = "vibe-matched" if attraction.date_vibe and 'adventurous' in attraction.date_vibe else "fallback"
+                        print(f"  🚶 Adventurous date: Selected nature walk ({vibe_match})")
                         break
         
         elif date_type == 'cultural':
-            # CULTURAL: Prioritize heritage sites and museums first
+            # CULTURAL: Prioritize heritage sites and cultural-vibe attractions
             if location is None and time_remaining >= 1.5 and available_heritage and not exclude_cultural:
+                # Heritage sites don't have date_vibe (fallback), so select first available
                 location = available_heritage[0]
                 activity_duration = min(1.5, time_remaining)
                 activity_type = 'Heritage Walk'
-                print(f"  🏛️ Cultural date: Selected heritage site")
+                print(f"  🏛️ Cultural date: Selected heritage site (fallback)")
             elif location is None and time_remaining >= 1.5 and available_attractions and not exclude_cultural:
-                # Look for cultural attractions (museums, galleries)
-                for attraction in available_attractions:
+                # Prioritize attractions with 'cultural' date_vibe, then fallback to no-vibe locations
+                cultural_attractions = [loc for loc in available_attractions 
+                                       if loc.date_vibe and 'cultural' in loc.date_vibe]
+                fallback_attractions = [loc for loc in available_attractions 
+                                       if not loc.date_vibe or len(loc.date_vibe) == 0]
+                
+                # Try cultural-vibe attractions first
+                for attraction in (cultural_attractions + fallback_attractions):
                     activity_type = self._get_attraction_activity_type(attraction, exclude_nature, exclude_cultural)
-                    if activity_type == 'Cultural Visit':  # Prioritize cultural for cultural dates
+                    if activity_type == 'Cultural Visit':  # Prefer cultural visits
                         location = attraction
                         activity_duration = min(2.0, time_remaining)
-                        print(f"  🎨 Cultural date: Selected cultural attraction")
+                        vibe_match = "vibe-matched" if attraction.date_vibe and 'cultural' in attraction.date_vibe else "fallback"
+                        print(f"  🎨 Cultural date: Selected cultural attraction ({vibe_match})")
                         break
+        
+        elif date_type == 'romantic':
+            # ROMANTIC: Prioritize romantic-vibe attractions over generic locations
+            if location is None and time_remaining >= 1.5 and available_attractions:
+                # Prioritize attractions with 'romantic' date_vibe, then fallback to no-vibe locations
+                romantic_attractions = [loc for loc in available_attractions 
+                                       if loc.date_vibe and 'romantic' in loc.date_vibe]
+                fallback_attractions = [loc for loc in available_attractions 
+                                       if not loc.date_vibe or len(loc.date_vibe) == 0]
+                
+                # Try romantic-vibe attractions first (prefer non-Walk activities for romantic dates)
+                for attraction in (romantic_attractions + fallback_attractions):
+                    activity_type = self._get_attraction_activity_type(attraction, exclude_nature, exclude_cultural)
+                    if activity_type in ['Cultural Visit', 'Visit']:  # Prefer indoor/cultural for romantic
+                        location = attraction
+                        activity_duration = min(2.0, time_remaining)
+                        vibe_match = "vibe-matched" if attraction.date_vibe and 'romantic' in attraction.date_vibe else "fallback"
+                        print(f"  💕 Romantic date: Selected romantic attraction ({vibe_match})")
+                        break
+        
+        elif date_type == 'casual':
+            # CASUAL: Prioritize casual-vibe attractions (most flexible)
+            if location is None and time_remaining >= 1.5 and available_attractions:
+                # Prioritize attractions with 'casual' date_vibe, then fallback to no-vibe locations
+                casual_attractions = [loc for loc in available_attractions 
+                                     if loc.date_vibe and 'casual' in loc.date_vibe]
+                fallback_attractions = [loc for loc in available_attractions 
+                                       if not loc.date_vibe or len(loc.date_vibe) == 0]
+                
+                # Try casual-vibe attractions first (any activity type is fine for casual)
+                combined_attractions = casual_attractions + fallback_attractions
+                if combined_attractions:
+                    location = combined_attractions[0]
+                    activity_duration = min(2.0, time_remaining)
+                    activity_type = self._get_attraction_activity_type(location, exclude_nature, exclude_cultural)
+                    vibe_match = "vibe-matched" if location.date_vibe and 'casual' in location.date_vibe else "fallback"
+                    print(f"  😊 Casual date: Selected casual attraction ({vibe_match})")
         
         # FALLBACK: Standard selection for romantic/casual OR if date-type-specific search failed
         if location is None and time_remaining >= 2.0 and available_attractions:
@@ -708,13 +822,21 @@ class AIDatePlanner:
         if location is None:
             return None
         
-        # Add travel time if there are previous activities
+        # Calculate travel time FIRST (before finalizing duration)
         start_time = current_time
+        travel_time = 0.0
         if existing_itinerary:
             last_location = existing_itinerary[-1].get('location_obj')
             if last_location:
                 travel_time = self._calculate_travel_time(last_location, location)
                 start_time = self._add_hours(current_time, travel_time)
+        
+        # Adjust activity duration to account for travel time AND remaining time
+        # Available time = time_remaining - travel_time
+        available_time = time_remaining - travel_time
+        if activity_duration > available_time:
+            activity_duration = max(0.5, available_time)  # Minimum 30 minutes for any activity
+            print(f"  ⏱️ Adjusted activity duration to {activity_duration:.1f}h (travel: {travel_time:.1f}h, available: {available_time:.1f}h)")
         
         end_time = self._add_hours(start_time, activity_duration)
         
@@ -986,18 +1108,33 @@ class AIDatePlanner:
         }
     
     def _time_difference(self, start_time: str, end_time: str) -> float:
-        """Calculate time difference in hours between two time strings"""
+        """
+        Calculate time difference in hours between two time strings.
+        Returns positive if end_time is after start_time, negative if before.
+        
+        For overnight dates, only treats as next day if difference would be > 12 hours backward.
+        This prevents false positives like 20:00 to 18:00 being treated as overnight.
+        """
         start_hour, start_min = map(int, start_time.split(':'))
         end_hour, end_min = map(int, end_time.split(':'))
         
         start_total_min = start_hour * 60 + start_min
         end_total_min = end_hour * 60 + end_min
         
-        # Handle overnight times
-        if end_total_min < start_total_min:
-            end_total_min += 24 * 60
+        # Calculate same-day difference first
+        same_day_diff = end_total_min - start_total_min
         
-        return (end_total_min - start_total_min) / 60.0
+        # Only treat as overnight if:
+        # 1. End time is before start time (negative difference)
+        # 2. The backward difference is >= 12 hours (indicates genuine overnight)
+        # This prevents 20:00 -> 18:00 (-2h) from being treated as overnight (+22h)
+        if same_day_diff < 0 and abs(same_day_diff) >= 12 * 60:
+            # Genuine overnight: add 24 hours to end time
+            end_total_min += 24 * 60
+            return (end_total_min - start_total_min) / 60.0
+        else:
+            # Same day or small backward difference: return as-is (can be negative)
+            return same_day_diff / 60.0
     
     def _time_after_or_equal(self, time1: str, time2: str) -> bool:
         """Check if time1 is after or equal to time2 (same day)"""
