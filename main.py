@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ai.ai_date_planner.ai_date_planner import AIDatePlanner
 from ai.ai_date_planner.rule_engine import UserPreferences
 from ai.conversation_starters.ai_conversation_starters import generate_conversation_starters
+from ai.intro_ai.intro_ai import generate_introduction_from_request
 
 # --- AI Re-ranker imports ---
 from ai.discover_profiles.models import Payload
@@ -113,6 +114,29 @@ Please generate an enhanced version of the user's answer that is more engaging a
     response = model.invoke([system_prompt, human_prompt])
     
     return response.content.strip()
+
+@app.post("/ai/introduction")
+def generate_introduction_message(request: dict):
+    """
+    Generate AI-powered introduction message based on context (bio, interests, or prompt).
+    
+    Request format:
+    {
+        "type": "bio" | "interests" | "prompt" | "general",
+        "name": "John",
+        "bio": "...",  // for type="bio"
+        "interests": ["hiking", "photography"],  // for type="interests"
+        "question": "What's your ideal weekend?",  // for type="prompt"
+        "answer": "Exploring new hiking trails"  // for type="prompt"
+    }
+    
+    Response format:
+    {
+        "message": "Generated introduction message..."
+    }
+    """
+    model = init_ai()
+    return generate_introduction_from_request(model, request)
 
 @app.post("/ai/lovabot")
 def generate_lovabot_response(request: dict):
