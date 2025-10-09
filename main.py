@@ -4,7 +4,7 @@ from ai.profile_management.ai_profile_management import init_ai
 from ai.ai_lovabot.ai_lovabot import chat as lovabot_chat
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import sys
 import os
 import subprocess
@@ -13,6 +13,7 @@ import tempfile
 import requests
 from urllib.parse import urlparse
 import base64
+import numpy as np
 
 # Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ai.ai_date_planner.ai_date_planner import AIDatePlanner
 from ai.ai_date_planner.rule_engine import UserPreferences
 from ai.conversation_starters.ai_conversation_starters import generate_conversation_starters
+# Use InsightFace-based verification AI for advanced face analysis
+from ai.verification.insightface_verification_ai import insightface_verification_ai as verification_ai
 
 # --- AI Re-ranker imports ---
 from ai.discover_profiles.models import Payload
@@ -559,3 +562,187 @@ def assess_image_quality_endpoint(request: ImageQualityRequest):
         )
         
         return fallback_response
+
+# ==============================
+# AI Verification System
+# ==============================
+
+class VerificationRequest(BaseModel):
+    photo_urls: List[str]
+    user_id: str
+    verification_level: str = "basic"
+
+class VerificationResponse(BaseModel):
+    success: bool
+    verification_id: str
+    overall_assessment: Dict[str, Any]
+    processing_time: float
+
+@app.post("/ai/verify-user", response_model=VerificationResponse)
+def verify_user_endpoint(request: VerificationRequest):
+    """
+    Comprehensive user verification using AI analysis
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        print(f"Starting verification for user {request.user_id} with {len(request.photo_urls)} photos")
+        
+        # Perform AI analysis
+        analysis_results = verification_ai.analyze_verification_photos(
+            request.photo_urls, 
+            request.user_id
+        )
+        
+        # Extract overall assessment
+        overall_assessment = analysis_results['overall_assessment']
+        
+        # Generate verification ID
+        verification_id = f"verification_{request.user_id}_{int(time.time())}"
+        
+        processing_time = time.time() - start_time
+        
+        return VerificationResponse(
+            success=True,
+            verification_id=verification_id,
+            overall_assessment=overall_assessment,
+            processing_time=round(processing_time, 2)
+        )
+        
+    except Exception as e:
+        print(f"Error in verification: {e}")
+        processing_time = time.time() - start_time
+        
+        return VerificationResponse(
+            success=False,
+            verification_id=f"error_{int(time.time())}",
+            overall_assessment={
+                'overall_score': 0.0,
+                'verification_status': 'error',
+                'requires_manual_review': True,
+                'recommendations': [f"Verification failed: {str(e)}"],
+                'confidence_level': 'low',
+                'face_consistency_score': 0.0,
+                'photo_quality_score': 0.0,
+                'deepfake_risk_score': 100.0
+            },
+            processing_time=round(processing_time, 2)
+        )
+
+class FaceAnalysisRequest(BaseModel):
+    photo_urls: List[str]
+
+class FaceAnalysisResponse(BaseModel):
+    success: bool
+    face_analyses: List[Dict[str, Any]]
+    consistency_score: float
+    face_count_per_photo: List[int]
+
+@app.post("/ai/analyze-faces", response_model=FaceAnalysisResponse)
+def analyze_faces_endpoint(request: FaceAnalysisRequest):
+    """
+    Analyze faces in verification photos
+    """
+    try:
+        print(f"Analyzing faces in {len(request.photo_urls)} photos")
+        
+        face_analyses = []
+        face_counts = []
+        
+        for photo_url in request.photo_urls:
+            # Download image
+            image_data = verification_ai._download_image(photo_url)
+            if image_data is not None:
+                # Analyze faces
+                face_analysis = verification_ai._analyze_faces_insightface(image_data)
+                face_analyses.append(face_analysis)
+                face_counts.append(face_analysis['face_count'])
+            else:
+                face_analyses.append({
+                    'face_count': 0,
+                    'face_detected': False,
+                    'error': 'Failed to download image'
+                })
+                face_counts.append(0)
+        
+        # Calculate consistency if multiple photos
+        consistency_score = 0
+        if len(face_analyses) > 1:
+            consistency_result = verification_ai._calculate_face_consistency(face_analyses)
+            consistency_score = consistency_result['consistency_score']
+        
+        return FaceAnalysisResponse(
+            success=True,
+            face_analyses=face_analyses,
+            consistency_score=consistency_score,
+            face_count_per_photo=face_counts
+        )
+        
+    except Exception as e:
+        print(f"Error in face analysis: {e}")
+        return FaceAnalysisResponse(
+            success=False,
+            face_analyses=[],
+            consistency_score=0.0,
+            face_count_per_photo=[]
+        )
+
+class DeepfakeDetectionRequest(BaseModel):
+    photo_urls: List[str]
+
+class DeepfakeDetectionResponse(BaseModel):
+    success: bool
+    deepfake_analyses: List[Dict[str, Any]]
+    overall_risk_score: float
+    high_risk_photos: List[int]
+
+@app.post("/ai/detect-deepfake", response_model=DeepfakeDetectionResponse)
+def detect_deepfake_endpoint(request: DeepfakeDetectionRequest):
+    """
+    Detect potential deepfake or manipulated images
+    
+
+    """
+    try:
+        print(f"Detecting deepfakes in {len(request.photo_urls)} photos")
+        
+        deepfake_analyses = []
+        high_risk_photos = []
+        
+        for i, photo_url in enumerate(request.photo_urls):
+            # Download image
+            image_data = verification_ai._download_image(photo_url)
+            if image_data is not None:
+                # Detect deepfake
+                deepfake_analysis = verification_ai._detect_deepfake(image_data)
+                deepfake_analyses.append(deepfake_analysis)
+                
+                if deepfake_analysis['manipulation_detected']:
+                    high_risk_photos.append(i)
+            else:
+                deepfake_analyses.append({
+                    'deepfake_probability': 0.0,
+                    'manipulation_detected': False,
+                    'error': 'Failed to download image'
+                })
+        
+        # Calculate overall risk score
+        risk_scores = [analysis.get('deepfake_probability', 0) for analysis in deepfake_analyses]
+        overall_risk_score = np.mean(risk_scores) * 100 if risk_scores else 0
+        
+        return DeepfakeDetectionResponse(
+            success=True,
+            deepfake_analyses=deepfake_analyses,
+            overall_risk_score=round(overall_risk_score, 2),
+            high_risk_photos=high_risk_photos
+        )
+        
+    except Exception as e:
+        print(f"Error in deepfake detection: {e}")
+        return DeepfakeDetectionResponse(
+            success=False,
+            deepfake_analyses=[],
+            overall_risk_score=100.0,
+            high_risk_photos=[]
+        )
