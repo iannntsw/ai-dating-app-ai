@@ -1,3 +1,7 @@
 nose
 scikit-learn
 pillow==5.0.*
+fastapi
+uvicorn[standard]
+python-multipart
+tensorflow
