@@ -374,18 +374,19 @@ def assess_image_quality(image_path: str) -> dict:
         docker_technical_weights = to_docker_path(technical_weights)
         docker_aesthetic_weights = to_docker_path(aesthetic_weights)
         
-        # Run technical assessment
+        # Run technical assessment using ARM64-compatible Docker image
         technical_cmd = [
-            "docker", "run", "--rm", "--entrypoint", "",
+            "docker", "run", "--rm", 
+            "--memory=2g", "--cpus=2",  # Limit resources
+            "--entrypoint", "bash",
             "-v", f"{docker_image_path}:/src/image.jpg",
             "-v", f"{docker_technical_weights}:/src/weights.hdf5",
-            "nima-cpu", "python", "-m", "evaluater.predict",
-            "--base-model-name", "MobileNet",
-            "--weights-file", "/src/weights.hdf5",
-            "--image-source", "/src/image.jpg"
+            "-v", f"{current_dir}/ai/image-quality-assessment/src:/src/nima",
+            "sonoisa/deep-learning-coding:pytorch1.6.0_tensorflow2.3.0", "-c", 
+            "cd /src/nima && python -m evaluater.predict --base-model-name MobileNet --weights-file /src/weights.hdf5 --image-source /src/image.jpg"
         ]
         
-        technical_result = subprocess.run(technical_cmd, capture_output=True, text=True, timeout=60)
+        technical_result = subprocess.run(technical_cmd, capture_output=True, text=True, timeout=30)
         
         if technical_result.returncode != 0:
             raise Exception(f"Technical assessment failed: {technical_result.stderr}")
@@ -409,18 +410,19 @@ def assess_image_quality(image_path: str) -> dict:
         json_str = ''.join(json_lines)
         technical_score = json.loads(json_str)[0]["mean_score_prediction"]
         
-        # Run aesthetic assessment
+        # Run aesthetic assessment using ARM64-compatible Docker image
         aesthetic_cmd = [
-            "docker", "run", "--rm", "--entrypoint", "",
+            "docker", "run", "--rm", 
+            "--memory=2g", "--cpus=2",  # Limit resources
+            "--entrypoint", "bash",
             "-v", f"{docker_image_path}:/src/image.jpg",
             "-v", f"{docker_aesthetic_weights}:/src/weights.hdf5",
-            "nima-cpu", "python", "-m", "evaluater.predict",
-            "--base-model-name", "MobileNet",
-            "--weights-file", "/src/weights.hdf5",
-            "--image-source", "/src/image.jpg"
+            "-v", f"{current_dir}/ai/image-quality-assessment/src:/src/nima",
+            "sonoisa/deep-learning-coding:pytorch1.6.0_tensorflow2.3.0", "-c", 
+            "cd /src/nima && python -m evaluater.predict --base-model-name MobileNet --weights-file /src/weights.hdf5 --image-source /src/image.jpg"
         ]
         
-        aesthetic_result = subprocess.run(aesthetic_cmd, capture_output=True, text=True, timeout=60)
+        aesthetic_result = subprocess.run(aesthetic_cmd, capture_output=True, text=True, timeout=30)
         
         if aesthetic_result.returncode != 0:
             raise Exception(f"Aesthetic assessment failed: {aesthetic_result.stderr}")
