@@ -126,6 +126,13 @@ class AIDatePlanner:
         duration = preferences.get_duration_hours()
         relevant_locations = rag_result.relevant_locations
         
+        # Add vendor food locations (from vendor FAISS)
+        # Vendor food doesn't come through static RAG, so we need to search vendor FAISS separately
+        vendor_food_locations = self._search_vendor_food(preferences)
+        if vendor_food_locations:
+            relevant_locations.extend(vendor_food_locations)
+            print(f"  🍽️ Added {len(vendor_food_locations)} vendor food locations from vendor FAISS")
+        
         # Group locations by type
         location_groups = self._group_locations_by_type(relevant_locations)
         
@@ -435,7 +442,7 @@ class AIDatePlanner:
         
         # PRIORITIZE MEALS: Always check if we should plan a meal first
         if self._should_plan_meal(current_time, existing_itinerary, preferences):
-            meal_result = self._plan_next_meal(location_groups, current_time, time_remaining, existing_itinerary)
+            meal_result = self._plan_next_meal(location_groups, current_time, time_remaining, existing_itinerary, preferences)
             if meal_result:  # If we can plan a meal, do it
                 return meal_result
         
@@ -473,10 +480,13 @@ class AIDatePlanner:
         
         return False
     
-    def _plan_next_meal(self, location_groups: Dict[str, List[Location]], current_time: str, time_remaining: float, existing_itinerary: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Plan the next meal with travel time"""
+    def _plan_next_meal(self, location_groups: Dict[str, List[Location]], current_time: str, time_remaining: float, existing_itinerary: List[Dict[str, Any]], preferences: UserPreferences = None) -> Optional[Dict[str, Any]]:
+        """Plan the next meal with travel time, prioritizing vendor food with matching date vibe"""
         if not location_groups['food']:
             return None
+        
+        # Get date type for vibe matching
+        date_type = preferences.date_type if preferences else 'casual'
         
         current_hour = int(current_time.split(':')[0])
         
@@ -520,6 +530,43 @@ class AIDatePlanner:
         
         available_food = [loc for loc in location_groups['food'] if loc.id not in used_location_ids]
         
+        # Filter out dessert places for main meals (breakfast, lunch, dinner)
+        if meal_type in ['Coffee/Breakfast', 'Lunch', 'Dinner', 'Late Dinner']:
+            dessert_keywords = [
+                'ice cream', 'gelato', 'gelare', 'dessert', 'sweet', 'bakery',
+                'patisserie', 'cake', 'donut', 'waffle', 'crepe', 'frozen yogurt',
+                'sorbet', 'sundae', 'parfait', 'tiramisu', 'macaron'
+            ]
+            non_dessert_food = []
+            for loc in available_food:
+                is_dessert = any(keyword in loc.name.lower() or keyword in (loc.description or '').lower() 
+                                for keyword in dessert_keywords)
+                if not is_dessert:
+                    non_dessert_food.append(loc)
+            
+            # Use non-dessert places if available, otherwise fall back to all
+            if non_dessert_food:
+                available_food = non_dessert_food
+                print(f"  🍽️ Filtered out dessert places for {meal_type}: {len(available_food)} suitable locations")
+        
+        # Filter out casual coffee shops for lunch and dinner (keep for breakfast/coffee break)
+        if meal_type in ['Lunch', 'Dinner', 'Late Dinner']:
+            coffee_shop_keywords = [
+                'toast', 'kopi', 'kopitiam', 'coffee shop', 'coffee stall',
+                'toast box', 'fun toast', 'ya kun', 'killiney', 'wang cafe'
+            ]
+            proper_meal_places = []
+            for loc in available_food:
+                is_coffee_shop = any(keyword in loc.name.lower() or keyword in (loc.description or '').lower() 
+                                    for keyword in coffee_shop_keywords)
+                if not is_coffee_shop:
+                    proper_meal_places.append(loc)
+            
+            # Use proper meal places if available, otherwise fall back to all
+            if proper_meal_places:
+                available_food = proper_meal_places
+                print(f"  🍽️ Filtered out coffee shops for {meal_type}: {len(available_food)} suitable locations")
+        
         if not available_food:
             # If all food locations used, allow reuse but prefer different ones
             available_food = location_groups['food']
@@ -528,6 +575,53 @@ class AIDatePlanner:
         meal_appropriate_food = [loc for loc in available_food if self._is_appropriate_for_meal(loc, meal_type)]
         
         print(f"🍽️ Planning {meal_type}: {len(available_food)} total, {len(meal_appropriate_food)} appropriate")
+        
+        # ============================================================================
+        # VENDOR FOOD PRIORITIZATION: 
+        # 1. RAG has already found relevant food locations (both static and vendor)
+        # 2. Now apply date vibe matching to prioritize vendor food
+        # ============================================================================
+        vendor_food = []
+        static_food = []
+        
+        for loc in meal_appropriate_food:
+            # Check if it's a vendor location (has isVendor in metadata)
+            is_vendor = False
+            if hasattr(loc, 'metadata'):
+                if isinstance(loc.metadata, dict):
+                    is_vendor = loc.metadata.get('isVendor', False)
+            
+            if is_vendor:
+                vendor_food.append(loc)
+            else:
+                static_food.append(loc)
+        
+        print(f"  📊 Food breakdown: {len(vendor_food)} vendor, {len(static_food)} static")
+        
+        if vendor_food:
+            # Filter vendor food by date vibe matching
+            vibe_matched_vendors = []
+            non_matched_vendors = []
+            
+            for loc in vendor_food:
+                loc_vibe = loc.date_vibe if hasattr(loc, 'date_vibe') and loc.date_vibe else []
+                if date_type in loc_vibe:
+                    vibe_matched_vendors.append(loc)
+                else:
+                    non_matched_vendors.append(loc)
+            
+            if vibe_matched_vendors:
+                # Randomize among vibe-matched vendor food for fair exposure
+                import random
+                random.shuffle(vibe_matched_vendors)
+                
+                # FINAL PRIORITY: [vibe-matched vendor food] + [static food from RAG] + [non-matched vendor food]
+                meal_appropriate_food = vibe_matched_vendors + static_food + non_matched_vendors
+                print(f"  🎯 VENDOR FOOD PRIORITY: {len(vibe_matched_vendors)} vibe-matched vendor food prioritized for '{date_type}' date")
+            else:
+                # No vibe match, static food gets priority
+                meal_appropriate_food = static_food + vendor_food
+                print(f"  ⚠️ No vendor food matches '{date_type}' vibe, static food prioritized")
         
         # CRITICAL: Never fall back to inappropriate venues for breakfast/coffee
         if not meal_appropriate_food:
@@ -632,6 +726,19 @@ class AIDatePlanner:
     
     def _plan_next_activity_only(self, location_groups: Dict[str, List[Location]], current_time: str, time_remaining: float, existing_itinerary: List[Dict[str, Any]], preferences: UserPreferences = None) -> Optional[Dict[str, Any]]:
         """Plan the next non-meal activity with travel time, considering date type preferences"""
+        
+        # ============================================================================
+        # VENDOR PRIORITIZATION: Search vendor activities first
+        # ============================================================================
+        vendor_location = self._search_vendor_activities(current_time, time_remaining, existing_itinerary, preferences)
+        if vendor_location:
+            print(f"  🎯 VENDOR PRIORITY: Selected vendor activity - {vendor_location.get('location', 'Unknown')}")
+            return vendor_location
+        
+        # ============================================================================
+        # FALLBACK TO STATIC ACTIVITIES (Original logic)
+        # ============================================================================
+        
         # Count existing activities to avoid too many of the same type
         activity_count = len([a for a in existing_itinerary if a.get('type') != 'food'])
         
@@ -664,6 +771,22 @@ class AIDatePlanner:
         
         # Apply date type filter to attractions (e.g., exclude zoo/river safari for romantic dates)
         available_attractions = [loc for loc in available_attractions if self._is_appropriate_for_date_type(loc, date_type)]
+        
+        # Apply nature exclusion to static attractions
+        if exclude_nature:
+            nature_keywords = [
+                'nature', 'park', 'garden', 'outdoor', 'hiking', 'trail',
+                'zoo', 'safari', 'wildlife', 'reservoir', 'beach', 'coastal',
+                'forest', 'botanical', 'jungle', 'mangrove', 'wetland',
+                'lake', 'river', 'waterfall', 'mountain', 'hill'
+            ]
+            available_attractions = [
+                loc for loc in available_attractions
+                if not any(keyword in loc.name.lower() or keyword in (loc.description or '').lower() 
+                          for keyword in nature_keywords)
+            ]
+            if len(available_attractions) < len([loc for loc in location_groups.get('attraction', []) if loc.id not in used_location_ids]):
+                print(f"  🚫 Nature exclusion: Filtered out nature-related attractions")
         
         # DEDUPLICATION: If zoo or river safari already used, exclude the other
         zoo_safari_keywords = ['singapore zoo', 'river safari', 'river wonders', 'night safari', 'wildlife reserves singapore']
@@ -1258,7 +1381,7 @@ class AIDatePlanner:
         return 'Attraction Visit'
     
     def _estimate_cost(self, itinerary: List[Dict[str, Any]], budget_tier: str) -> str:
-        """Estimate total cost based on budget tier and meal-specific pricing"""
+        """Estimate total cost based on budget tier and meal-specific pricing, using vendor prices when available"""
         total_min = 0
         total_max = 0
         
@@ -1273,14 +1396,32 @@ class AIDatePlanner:
         
         for item in itinerary:
             if item.get('type') == 'food':
-                meal_type = item.get('activity', '')
-                if meal_type in meal_costs:
-                    cost_range = meal_costs[meal_type]
-                    total_min += cost_range[0]
-                    total_max += cost_range[1]
+                # Check if this is a vendor food with a specific price
+                location_obj = item.get('location_obj')
+                vendor_price = None
+                
+                if location_obj and hasattr(location_obj, 'metadata'):
+                    vendor_price = location_obj.metadata.get('price')
+                
+                if vendor_price and vendor_price > 0:
+                    # Use vendor's specific price
+                    print(f"    💰 Using vendor price for {item.get('location')}: ${vendor_price}")
+                    total_min += vendor_price
+                    total_max += vendor_price
+                else:
+                    # Use budget tier-based estimation
+                    meal_type = item.get('activity', '')
+                    if meal_type in meal_costs:
+                        cost_range = meal_costs[meal_type]
+                        total_min += cost_range[0]
+                        total_max += cost_range[1]
         
         if total_min == 0 and total_max == 0:
             return "Minimal cost (no meals planned)"
+        
+        # If min and max are the same, show single value
+        if total_min == total_max:
+            return f"${total_min} per person"
         
         return f"${total_min}-${total_max} per person"
     
@@ -1412,3 +1553,360 @@ class AIDatePlanner:
                 'error': str(e),
                 'message': 'Failed to generate embeddings. Check your setup.'
             }
+    
+    def _search_vendor_activities(self, current_time: str, time_remaining: float, existing_itinerary: List[Dict[str, Any]], preferences: UserPreferences) -> Optional[Dict[str, Any]]:
+        """Search for vendor activities using FAISS and apply filtering"""
+        try:
+            from .vendor_embedding_service import VendorEmbeddingService
+            
+            # Initialize vendor service
+            vendor_service = VendorEmbeddingService()
+            
+            # Check if vendor embeddings are available
+            if not os.path.exists(vendor_service.vendor_embeddings_file):
+                print("  ⚠️ Vendor embeddings not found, skipping vendor search")
+                return None
+            
+            # Load vendor embeddings and FAISS index
+            vendor_service.load_vendor_embeddings()
+            vendor_service.load_vendor_faiss_index()
+            
+            # Create search query based on date type and preferences
+            date_type = preferences.date_type if preferences else 'casual'
+            interests = preferences.interests if preferences else ['culture', 'nature']
+            
+            # Build search query
+            query_parts = [date_type] + interests
+            query_text = ' '.join(query_parts)
+            
+            print(f"  🔍 Searching vendor activities for: {query_text}")
+            
+            # Search vendor activities
+            vendor_results = vendor_service.search_vendor_locations(query_text, k=10)
+            
+            if not vendor_results:
+                print("  ⚠️ No vendor activities found")
+                return None
+            
+            print(f"  📊 Found {len(vendor_results)} vendor activities")
+            
+            # Get used location IDs to avoid duplicates
+            used_location_ids = set()
+            for a in existing_itinerary:
+                if isinstance(a, dict) and 'location_obj' in a:
+                    used_location_ids.add(a['location_obj'].id)
+                elif hasattr(a, 'id'):
+                    used_location_ids.add(a.id)
+            
+            # Filter vendor results
+            available_vendors = []
+            for result in vendor_results:
+                location = result['location']
+                
+                # Skip if already used
+                if location['id'] in used_location_ids:
+                    continue
+                
+                # Check vendor activity date availability
+                start_date = location['metadata'].get('startDate')
+                end_date = location['metadata'].get('endDate')
+                
+                if start_date or end_date:
+                    from datetime import datetime
+                    # Use the date from preferences, or default to today
+                    if preferences.date:
+                        planned_date = datetime.strptime(preferences.date, '%Y-%m-%d').date()
+                    else:
+                        planned_date = datetime.now().date()
+                    print(f"    📅 Date check - Planning for: {planned_date}")
+                    
+                    # Convert to date objects if they're datetime objects
+                    if start_date and isinstance(start_date, datetime):
+                        start_date = start_date.date()
+                    if end_date and isinstance(end_date, datetime):
+                        end_date = end_date.date()
+                    
+                    # Check based on which dates are provided
+                    is_available = False
+                    
+                    if start_date and end_date:
+                        # Has both dates: must be within or on the range
+                        is_available = start_date <= planned_date <= end_date
+                        if not is_available:
+                            print(f"    🚫 Vendor date out of range: {location['name']} (available {start_date} to {end_date}, planning for: {planned_date})")
+                    elif end_date:
+                        # Has only end date: must be before or on end date
+                        is_available = planned_date <= end_date
+                        if not is_available:
+                            print(f"    🚫 Vendor past end date: {location['name']} (available until {end_date}, planning for: {planned_date})")
+                    elif start_date:
+                        # Has only start date: must be after or on start date
+                        is_available = planned_date >= start_date
+                        if not is_available:
+                            print(f"    🚫 Vendor before start date: {location['name']} (available from {start_date}, planning for: {planned_date})")
+                    
+                    if not is_available:
+                        continue
+                # If no dates provided, assume always available
+                
+                # Apply distance guardrail (5-10 km from starting location)
+                if preferences.start_latitude and preferences.start_longitude:
+                    distance_km = self._calculate_distance(
+                        preferences.start_latitude, preferences.start_longitude,
+                        location['coordinates'][1], location['coordinates'][0]  # lat, lng
+                    )
+                    if distance_km > 10.0:  # 10 km max distance
+                        print(f"    🚫 Vendor too far: {location['name']} ({distance_km:.1f}km)")
+                        continue
+                
+                # Apply date vibe filtering
+                if location.get('date_vibe') and date_type not in location['date_vibe']:
+                    print(f"    🚫 Vendor vibe mismatch: {location['name']} ({location['date_vibe']} vs {date_type})")
+                    continue
+                
+                # Apply exclusions to vendor activities
+                activity_type = location['metadata'].get('activityType', '')
+                category = location['metadata'].get('category', '')
+                
+                # Skip food activities in activity planning
+                if activity_type == 'Food':
+                    continue
+                
+                # Map activityType to exclusion categories
+                if activity_type == 'Sports' and 'sports' in self._current_exclusions:
+                    print(f"    🚫 Vendor excluded (sports): {location['name']}")
+                    continue
+                
+                # Map category to exclusion categories
+                if category == 'Heritage' and 'cultural' in self._current_exclusions:
+                    print(f"    🚫 Vendor excluded (cultural/heritage): {location['name']}")
+                    continue
+                
+                # Check if it's nature-related
+                if 'nature' in self._current_exclusions:
+                    nature_keywords = [
+                        'nature', 'park', 'garden', 'outdoor', 'hiking', 'trail',
+                        'zoo', 'safari', 'wildlife', 'reservoir', 'beach', 'coastal',
+                        'forest', 'botanical', 'jungle', 'mangrove', 'wetland',
+                        'lake', 'river', 'waterfall', 'mountain', 'hill'
+                    ]
+                    if any(keyword in location['name'].lower() or keyword in location.get('description', '').lower() 
+                           for keyword in nature_keywords):
+                        print(f"    🚫 Vendor excluded (nature): {location['name']}")
+                        continue
+                
+                # Check if activity fits time constraints
+                duration_minutes = location['metadata'].get('durationMinutes', 120)
+                duration_hours = duration_minutes / 60.0
+                
+                if duration_hours > time_remaining:
+                    print(f"    🚫 Vendor too long: {location['name']} ({duration_hours:.1f}h > {time_remaining:.1f}h)")
+                    continue
+                
+                available_vendors.append((location, result['score'], duration_hours))
+            
+            if not available_vendors:
+                print("  ⚠️ No suitable vendor activities after filtering")
+                return None
+            
+            # Sort by score and randomize among top results
+            available_vendors.sort(key=lambda x: x[1], reverse=True)
+            
+            # Randomize selection among top 3 vendors for fair exposure
+            import random
+            top_vendors = available_vendors[:min(3, len(available_vendors))]
+            random.shuffle(top_vendors)
+            
+            selected_vendor, score, duration_hours = top_vendors[0]
+            
+            print(f"  ✅ Selected vendor: {selected_vendor['name']} (score: {score:.3f}, duration: {duration_hours:.1f}h)")
+            
+            # Use vendor's stipulated duration (durationMinutes)
+            stipulated_duration_minutes = selected_vendor['metadata'].get('durationMinutes')
+            if stipulated_duration_minutes:
+                duration_hours = stipulated_duration_minutes / 60.0
+                print(f"  ⏱️ Using vendor's stipulated duration: {duration_hours:.1f}h ({stipulated_duration_minutes} minutes)")
+            
+            # Create activity result
+            current_hour = int(current_time.split(':')[0])
+            start_time = current_time
+            end_time = self._add_hours(start_time, duration_hours)
+            
+            # Determine activity type based on vendor activity type
+            activity_type_map = {
+                'Sports': 'Sports Activity',
+                'Workshop': 'Workshop',
+                'Attraction Visit': 'Attraction Visit'
+            }
+            activity_type = activity_type_map.get(selected_vendor['metadata'].get('activityType', ''), 'Activity')
+            
+            # Create a Location-like object from vendor dictionary for compatibility
+            from .data_processor import Location
+            vendor_location = Location(
+                id=selected_vendor['id'],
+                name=selected_vendor['name'],
+                location_type=selected_vendor['location_type'],
+                coordinates=tuple(selected_vendor['coordinates']),
+                address=selected_vendor.get('address', ''),
+                description=selected_vendor.get('description', ''),
+                metadata=selected_vendor.get('metadata', {}),
+                date_vibe=selected_vendor.get('date_vibe', [])
+            )
+            
+            return {
+                'activity': activity_type,
+                'location': selected_vendor['name'],
+                'address': selected_vendor.get('address', ''),
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': duration_hours,
+                'type': selected_vendor['location_type'],
+                'description': selected_vendor.get('description', ''),
+                'location_obj': vendor_location,
+                'is_vendor': True,
+                'vendor_score': score
+            }
+            
+        except Exception as e:
+            print(f"  ❌ Error searching vendor activities: {e}")
+            return None
+    
+    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance between two points using Haversine formula"""
+        from math import radians, cos, sin, asin, sqrt
+        
+        # Convert decimal degrees to radians
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        
+        # Haversine formula
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a))
+        
+        # Radius of earth in kilometers
+        r = 6371
+        return c * r
+    
+    def _search_vendor_food(self, preferences: UserPreferences) -> List[Location]:
+        """Search vendor food locations using vendor FAISS"""
+        try:
+            from .vendor_embedding_service import VendorEmbeddingService
+            from .data_processor import Location
+            from datetime import datetime
+            
+            # Initialize vendor service
+            vendor_service = VendorEmbeddingService()
+            
+            # Check if vendor embeddings are available
+            if not os.path.exists(vendor_service.vendor_embeddings_file):
+                return []
+            
+            # Load vendor embeddings and FAISS index
+            vendor_service.load_vendor_embeddings()
+            vendor_service.load_vendor_faiss_index()
+            
+            # Create search query for food
+            query_parts = [preferences.date_type] + preferences.interests + ['food', 'meal', 'restaurant']
+            query_text = ' '.join(query_parts)
+            
+            # Search vendor activities
+            vendor_results = vendor_service.search_vendor_locations(query_text, k=20)
+            
+            if not vendor_results:
+                return []
+            
+            # Filter for food vendors only with proper filtering
+            vendor_food_locations = []
+            print(f"  📊 Vendor FAISS search returned {len(vendor_results)} results")
+            
+            for result in vendor_results:
+                location_dict = result['location']
+                
+                print(f"    🔍 Checking: {location_dict['name']} | type: {location_dict['location_type']}")
+                
+                # Only include food type vendors
+                if location_dict['location_type'] != 'food':
+                    print(f"      ❌ Skipped (not food)")
+                    continue
+                
+                # Check vendor food date availability
+                start_date = location_dict['metadata'].get('startDate')
+                end_date = location_dict['metadata'].get('endDate')
+                
+                if start_date or end_date:
+                    # Use the date from preferences, or default to today
+                    if preferences.date:
+                        planned_date = datetime.strptime(preferences.date, '%Y-%m-%d').date()
+                    else:
+                        planned_date = datetime.now().date()
+                    
+                    # Convert to date objects if they're datetime objects
+                    if start_date and isinstance(start_date, datetime):
+                        start_date = start_date.date()
+                    if end_date and isinstance(end_date, datetime):
+                        end_date = end_date.date()
+                    
+                    # Check based on which dates are provided
+                    is_available = False
+                    
+                    if start_date and end_date:
+                        # Has both dates: must be within or on the range
+                        is_available = start_date <= planned_date <= end_date
+                        if not is_available:
+                            print(f"      ❌ Date out of range ({start_date} to {end_date}, planning for: {planned_date})")
+                        else:
+                            print(f"      ✅ Date in range ({start_date} to {end_date})")
+                    elif end_date:
+                        # Has only end date: must be before or on end date
+                        is_available = planned_date <= end_date
+                        if not is_available:
+                            print(f"      ❌ Past end date (until {end_date}, planning for: {planned_date})")
+                        else:
+                            print(f"      ✅ Before end date (until {end_date})")
+                    elif start_date:
+                        # Has only start date: must be after or on start date
+                        is_available = planned_date >= start_date
+                        if not is_available:
+                            print(f"      ❌ Before start date (from {start_date}, planning for: {planned_date})")
+                        else:
+                            print(f"      ✅ After start date (from {start_date})")
+                    
+                    if not is_available:
+                        continue
+                # If no dates provided, assume always available
+                
+                # Check distance from starting location
+                if preferences.start_latitude and preferences.start_longitude:
+                    distance_km = self._calculate_distance(
+                        preferences.start_latitude, preferences.start_longitude,
+                        location_dict['coordinates'][1], location_dict['coordinates'][0]
+                    )
+                    if distance_km > 10.0:  # 10 km max distance
+                        print(f"      ❌ Too far ({distance_km:.1f}km)")
+                        continue
+                    else:
+                        print(f"      ✅ Distance OK ({distance_km:.1f}km)")
+                
+                # Convert to Location object
+                vendor_location = Location(
+                    id=location_dict['id'],
+                    name=location_dict['name'],
+                    location_type=location_dict['location_type'],
+                    coordinates=tuple(location_dict['coordinates']),
+                    address=location_dict.get('address', ''),
+                    description=location_dict.get('description', ''),
+                    metadata=location_dict.get('metadata', {}),
+                    date_vibe=location_dict.get('date_vibe', [])
+                )
+                
+                vendor_food_locations.append(vendor_location)
+                print(f"      ✅ ADDED to vendor food locations!")
+            
+            print(f"  🍽️ Total vendor food locations found: {len(vendor_food_locations)}")
+            return vendor_food_locations
+            
+        except Exception as e:
+            print(f"  ❌ Error searching vendor food: {e}")
+            return []
+    

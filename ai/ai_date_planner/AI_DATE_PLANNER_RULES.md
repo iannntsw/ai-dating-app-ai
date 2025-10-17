@@ -9,6 +9,7 @@ The AI Date Planner uses a **hybrid approach** combining:
 - **Fixed exclusion checkboxes** (max 2 exclusions)
 - **Date type prioritization** (tailored food and activities for each date type)
 - **Diversity sampling** (70 food + 30 non-food locations)
+- **Vendor Activity Integration** (dynamic vendor-created activities with date availability and custom pricing)
 
 ## ✅ Current Status
 
@@ -23,6 +24,8 @@ The AI Date Planner uses a **hybrid approach** combining:
 - ✅ **75% time usage validation** to ensure full dates
 - ✅ **Enhanced breakfast filtering** for appropriate venues
 - ✅ **Romantic date type enhancement** for better venue matching
+- ✅ **Vendor activity integration** with dual FAISS indices and date availability checking
+- ✅ **Dynamic vendor pricing** for accurate cost estimates
 
 ## 🎛️ User Input System
 
@@ -60,6 +63,160 @@ Users can exclude up to **2 activity types** from their date:
   - 12:00-17:00 → "afternoon"
   - 17:00-21:00 → "evening"
   - 21:00-02:00 → "night"
+
+## 🏢 Vendor Activity Integration
+
+### **Overview**
+
+The system integrates **dynamic vendor-created activities** from MongoDB alongside static location data. Vendors can create:
+
+- **Food Activities** (restaurants, cafes, special dining experiences)
+- **Non-Food Activities** (sports, attractions, workshops, heritage experiences)
+
+### **Dual FAISS System**
+
+The planner maintains **two separate FAISS indices**:
+
+| Index Type       | File Location                                                                         | Content                                                                                                   | Update Frequency                        | Results Returned                 |
+| ---------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------- |
+| **Static FAISS** | `ai/ai_date_planner/embeddings.pkl` <br> `ai/ai_date_planner/faiss_index.bin`         | ~31,580 static locations (eating establishments, tourist attractions, sports facilities, heritage trails) | Manual regeneration only                | ~200 locations from RAG search   |
+| **Vendor FAISS** | `ai/ai_date_planner/vendor_embeddings.pkl` <br> `ai/ai_date_planner/vendor_faiss.bin` | Active vendor activities from MongoDB                                                                     | Daily at 12 AM (cron) + manual endpoint | ~20-50 vendor matches per search |
+
+**Why Separate Indices?**
+
+- ✅ Static data rarely changes (no frequent regeneration needed)
+- ✅ Vendor data changes daily (activities expire, new ones added)
+- ✅ Faster regeneration (only vendor index needs updating)
+- ✅ Better git workflow (vendor embeddings ignored in `.gitignore`)
+
+### **Vendor Activity Schema**
+
+```typescript
+{
+  id: string,
+  vendorId: string,
+  title: string,
+  description: string,
+  category: string,        // Date vibe: "Casual", "Romantic", "Adventurous", "Heritage"
+  activityType: string,    // "Food", "Sports", "Workshop", "Attraction Visit"
+  price: number,           // Per person (optional, falls back to budget tier if not set)
+  durationMinutes: number, // Activity duration (optional, default: 120 for activities, 60-120 for food)
+  location: string,        // Text description (e.g., "Marina Bay area")
+  coordinates: {
+    latitude: number,
+    longitude: number
+  },
+  imageUrl: string,
+  startDate: Date,         // Optional: Activity becomes available
+  endDate: Date,           // Optional: Activity expires
+  isActive: boolean,       // Vendor can activate/deactivate
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+### **Date Availability Logic**
+
+Vendor activities are filtered based on the **planned date** (from user input or defaults to today):
+
+| Scenario             | Start Date | End Date   | Availability Rule                      |
+| -------------------- | ---------- | ---------- | -------------------------------------- |
+| **Always Available** | ❌ Not set | ❌ Not set | ✅ Always included                     |
+| **Future Activity**  | ✅ Oct 25  | ❌ Not set | ✅ Included (can plan future dates)    |
+| **Limited Time**     | ✅ Oct 1   | ✅ Oct 31  | ✅ If planned date is Oct 1-31         |
+| **Limited Time**     | ✅ Oct 1   | ✅ Oct 31  | ❌ If planned date is Nov 1+ (expired) |
+| **Until End Date**   | ❌ Not set | ✅ Oct 31  | ✅ If planned date is ≤ Oct 31         |
+| **Until End Date**   | ❌ Not set | ✅ Oct 31  | ❌ If planned date is Nov 1+ (expired) |
+
+**Backend Filtering (Embedding Service):**
+
+- Only fetches active activities where `isActive = true`
+- Only fetches non-expired activities where `endDate >= today` or `endDate` doesn't exist
+
+**Frontend Filtering (Date Planner):**
+
+- Applies date range checks when searching vendor FAISS
+- Uses `preferences.date` parameter if provided (YYYY-MM-DD format)
+- Defaults to `datetime.now().date()` if no date specified
+
+**Frontend Activation:**
+
+- Vendors can activate activities that haven't started yet (future dates)
+- Vendors **cannot** activate expired activities (endDate in the past)
+- Expired activities are auto-deactivated when fetched
+
+### **Vendor Pricing**
+
+| Pricing Type          | Behavior                  | Example                                      |
+| --------------------- | ------------------------- | -------------------------------------------- |
+| **With Price Set**    | Uses exact vendor price   | Vendor sets $35 → Shows $35 in cost estimate |
+| **No Price (null/0)** | Falls back to budget tier | $$ Dinner → $20-40 estimate                  |
+
+**Cost Calculation:**
+
+```python
+if vendor_food and vendor_food.price > 0:
+    total += vendor_food.price  # Exact price
+else:
+    total += budget_tier_estimate  # Fallback
+```
+
+### **Vendor Prioritization System**
+
+The planner prioritizes vendor activities using a **two-stage approach**:
+
+#### **Stage 1: RAG Search (Vendor FAISS First)**
+
+When planning non-food activities, the system:
+
+1. **Searches Vendor FAISS** for relevant activities
+2. **Applies Filtering:**
+   - ✅ Date vibe must match date type (e.g., `category: "Romantic"` for romantic dates)
+   - ✅ Date availability must be valid (within startDate/endDate range)
+   - ✅ Distance from starting location ≤ 10km (reasonable travel distance)
+   - ✅ Not already used in itinerary (no duplicates)
+   - ✅ Respects exclusions (e.g., nature exclusion filters out nature-focused vendor activities)
+3. **Returns ~5-20 vendor matches** (depends on query and filters)
+4. **Falls back to Static FAISS** if no vendor matches found
+
+#### **Stage 2: Final Selection (Vendor Priority)**
+
+After RAG search, the system selects activities:
+
+- **For Non-Food Activities:**
+
+  1. Vendor activities (filtered by vibe + date + distance)
+  2. Static activities (if no vendor matches)
+
+- **For Food (Meals):**
+  1. Vendor food with matching date vibe (e.g., romantic vendor food for romantic dates)
+  2. Static food locations (from RAG search)
+  3. Vendor food with non-matching vibe (last resort)
+
+**Why This Approach?**
+
+- ✅ Vendors get priority exposure (business model)
+- ✅ Static data acts as fallback (always enough options)
+- ✅ Vibe matching ensures quality (romantic vendor food for romantic dates)
+- ✅ Distance filtering prevents impractical suggestions (10km max)
+- ✅ Date filtering ensures availability (no expired activities)
+
+### **Vendor Embedding Regeneration**
+
+**Automatic (Cron Job):**
+
+- Runs daily at **12:00 AM Singapore time**
+- Fetches all active, non-expired vendor activities from MongoDB
+- Generates embeddings using `all-MiniLM-L6-v2` model
+- Saves to `vendor_embeddings.pkl` and `vendor_faiss.bin`
+
+**Manual (API Endpoint):**
+
+- **Endpoint:** `POST /api/vendor/embeddings/manual`
+- **Use Case:** Vendor creates new activity and wants it available immediately
+- **Response:** `{ status: 'success', count: 5, message: 'Generated 5 vendor embeddings' }`
+
+**Note:** Vendor embeddings are **ignored in `.gitignore`** because they depend on the MongoDB database state and should be regenerated in each environment.
 
 ## 🎯 Core Planning Rules
 
@@ -149,9 +306,10 @@ non_breakfast_keywords = [
 
 **Cost Calculation:**
 
-- Breakfast & Coffee Break: **Always $10 per person**
-- Lunch: Budget tier × 0.8 (80% of full cost)
-- Dinner: Budget tier × 1.0 (full cost)
+- Breakfast & Coffee Break: **Always $10 per person** (unless vendor food with specific price)
+- Lunch: Budget tier × 0.8 (80% of full cost) (unless vendor food with specific price)
+- Dinner: Budget tier × 1.0 (full cost) (unless vendor food with specific price)
+- **Vendor Food**: Uses vendor's exact price if set, otherwise falls back to budget tier
 - **Default budget**: $$ (moderate pricing)
 
 **CRITICAL: Budget ONLY Applies to Food**
