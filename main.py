@@ -14,12 +14,16 @@ import requests
 from urllib.parse import urlparse
 import base64
 import numpy as np
+import schedule
+import time
+import threading
 
 # Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ai.ai_date_planner.ai_date_planner import AIDatePlanner
 from ai.ai_date_planner.rule_engine import UserPreferences
+from ai.ai_date_planner.vendor_embedding_service import VendorEmbeddingService
 from ai.conversation_starters.ai_conversation_starters import generate_conversation_starters
 # Use InsightFace-based verification AI for advanced face analysis
 from ai.verification.insightface_verification_ai import insightface_verification_ai as verification_ai
@@ -222,6 +226,7 @@ def generate_conversation_starters_endpoint(request: dict):
 class DatePlanRequest(BaseModel):
     start_time: str = "10:00"
     end_time: Optional[str] = None
+    date: Optional[str] = None  # Date in YYYY-MM-DD format (defaults to today if not provided)
     start_latitude: Optional[float] = None
     start_longitude: Optional[float] = None
     interests: List[str] = ["food", "culture", "nature"]
@@ -255,6 +260,7 @@ def plan_date(request: DatePlanRequest):
         preferences = UserPreferences(
             start_time=request.start_time,
             end_time=request.end_time,
+            date=request.date,
             start_latitude=request.start_latitude,
             start_longitude=request.start_longitude,
             interests=request.interests,
@@ -770,3 +776,192 @@ def detect_deepfake_endpoint(request: DeepfakeDetectionRequest):
             overall_risk_score=100.0,
             high_risk_photos=[]
         )
+
+# ============================================================================
+# VENDOR EMBEDDING ENDPOINTS
+# ============================================================================
+
+class VendorEmbeddingResponse(BaseModel):
+    success: bool
+    message: str
+    vendor_count: int = 0
+    embeddings_generated: bool = False
+    faiss_index_built: bool = False
+
+@app.post("/api/vendor/embeddings/cron", response_model=VendorEmbeddingResponse)
+async def regenerate_vendor_embeddings_cron():
+    """Cron job endpoint to regenerate vendor embeddings daily at 12 AM"""
+    try:
+        print("🔄 CRON: Starting vendor embedding regeneration...")
+        
+        # Initialize vendor embedding service
+        vendor_service = VendorEmbeddingService()
+        
+        # Generate vendor embeddings
+        embeddings = vendor_service.generate_vendor_embeddings(force_regenerate=True)
+        
+        if embeddings.size == 0:
+            return VendorEmbeddingResponse(
+                success=True,
+                message="No vendor activities found to process",
+                vendor_count=0,
+                embeddings_generated=False,
+                faiss_index_built=False
+            )
+        
+        # Build FAISS index
+        faiss_index = vendor_service.build_vendor_faiss_index()
+        
+        # Disconnect from MongoDB
+        vendor_service.disconnect_from_mongodb()
+        
+        print("✅ CRON: Vendor embedding regeneration completed successfully")
+        
+        return VendorEmbeddingResponse(
+            success=True,
+            message="Vendor embeddings regenerated successfully via cron",
+            vendor_count=len(vendor_service.vendor_locations),
+            embeddings_generated=True,
+            faiss_index_built=True
+        )
+        
+    except Exception as e:
+        print(f"❌ CRON: Error regenerating vendor embeddings: {e}")
+        return VendorEmbeddingResponse(
+            success=False,
+            message=f"Error regenerating vendor embeddings: {str(e)}",
+            vendor_count=0,
+            embeddings_generated=False,
+            faiss_index_built=False
+        )
+
+@app.post("/api/vendor/embeddings/manual", response_model=VendorEmbeddingResponse)
+async def regenerate_vendor_embeddings_manual():
+    """Manual endpoint to regenerate vendor embeddings for testing"""
+    try:
+        print("🔄 MANUAL: Starting vendor embedding regeneration...")
+        
+        # Initialize vendor embedding service
+        vendor_service = VendorEmbeddingService()
+        
+        # Generate vendor embeddings
+        embeddings = vendor_service.generate_vendor_embeddings(force_regenerate=True)
+        
+        if embeddings.size == 0:
+            return VendorEmbeddingResponse(
+                success=True,
+                message="No vendor activities found to process",
+                vendor_count=0,
+                embeddings_generated=False,
+                faiss_index_built=False
+            )
+        
+        # Build FAISS index
+        faiss_index = vendor_service.build_vendor_faiss_index()
+        
+        # Disconnect from MongoDB
+        vendor_service.disconnect_from_mongodb()
+        
+        print("✅ MANUAL: Vendor embedding regeneration completed successfully")
+        
+        return VendorEmbeddingResponse(
+            success=True,
+            message="Vendor embeddings regenerated successfully via manual trigger",
+            vendor_count=len(vendor_service.vendor_locations),
+            embeddings_generated=True,
+            faiss_index_built=True
+        )
+        
+    except Exception as e:
+        print(f"❌ MANUAL: Error regenerating vendor embeddings: {e}")
+        return VendorEmbeddingResponse(
+            success=False,
+            message=f"Error regenerating vendor embeddings: {str(e)}",
+            vendor_count=0,
+            embeddings_generated=False,
+            faiss_index_built=False
+        )
+
+@app.get("/api/vendor/embeddings/status")
+async def get_vendor_embeddings_status():
+    """Check status of vendor embeddings and FAISS index"""
+    try:
+        vendor_service = VendorEmbeddingService()
+        
+        # Check if files exist
+        embeddings_exist = os.path.exists(vendor_service.vendor_embeddings_file)
+        faiss_index_exist = os.path.exists(vendor_service.vendor_index_file)
+        
+        # Try to load if they exist
+        embeddings_ready = False
+        faiss_ready = False
+        vendor_count = 0
+        
+        if embeddings_exist:
+            try:
+                vendor_service.load_vendor_embeddings()
+                embeddings_ready = True
+                vendor_count = len(vendor_service.vendor_locations)
+            except Exception as e:
+                print(f"Error loading vendor embeddings: {e}")
+        
+        if faiss_index_exist:
+            try:
+                vendor_service.load_vendor_faiss_index()
+                faiss_ready = True
+            except Exception as e:
+                print(f"Error loading vendor FAISS index: {e}")
+        
+        return {
+            "embeddings_exist": embeddings_exist,
+            "faiss_index_exist": faiss_index_exist,
+            "embeddings_ready": embeddings_ready,
+            "faiss_ready": faiss_ready,
+            "vendor_count": vendor_count,
+            "overall_ready": embeddings_ready and faiss_ready
+        }
+        
+    except Exception as e:
+        return {
+            "embeddings_exist": False,
+            "faiss_index_exist": False,
+            "embeddings_ready": False,
+            "faiss_ready": False,
+            "vendor_count": 0,
+            "overall_ready": False,
+            "error": str(e)
+        }
+
+# ============================================================================
+# CRON JOB SETUP
+# ============================================================================
+
+def run_vendor_embeddings_cron():
+    """Function to run vendor embeddings cron job"""
+    try:
+        print("🕛 CRON JOB: Starting scheduled vendor embedding regeneration...")
+        response = requests.post("http://localhost:8000/api/vendor/embeddings/cron")
+        result = response.json()
+        print(f"🕛 CRON JOB: {result['message']}")
+    except Exception as e:
+        print(f"🕛 CRON JOB ERROR: {e}")
+
+def start_cron_scheduler():
+    """Start the cron scheduler in a separate thread"""
+    def run_scheduler():
+        # Schedule vendor embeddings regeneration daily at 12:00 AM
+        schedule.every().day.at("00:00").do(run_vendor_embeddings_cron)
+        
+        print("🕛 CRON SCHEDULER: Started - Vendor embeddings will regenerate daily at 12:00 AM")
+        
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+    
+    # Start scheduler in background thread
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    print("✅ CRON SCHEDULER: Background thread started")
+
+# Start cron scheduler when the app starts
+start_cron_scheduler()
