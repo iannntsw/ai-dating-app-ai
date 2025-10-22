@@ -835,52 +835,6 @@ async def regenerate_vendor_embeddings_cron():
             faiss_index_built=False
         )
 
-@app.post("/api/vendor/embeddings/manual", response_model=VendorEmbeddingResponse)
-async def regenerate_vendor_embeddings_manual():
-    """Manual endpoint to regenerate vendor embeddings for testing"""
-    try:
-        print("🔄 MANUAL: Starting vendor embedding regeneration...")
-        
-        # Initialize vendor embedding service
-        vendor_service = VendorEmbeddingService()
-        
-        # Generate vendor embeddings
-        embeddings = vendor_service.generate_vendor_embeddings(force_regenerate=True)
-        
-        if embeddings.size == 0:
-            return VendorEmbeddingResponse(
-                success=True,
-                message="No vendor activities found to process",
-                vendor_count=0,
-                embeddings_generated=False,
-                faiss_index_built=False
-            )
-        
-        # Build FAISS index
-        faiss_index = vendor_service.build_vendor_faiss_index()
-        
-        # Disconnect from MongoDB
-        vendor_service.disconnect_from_mongodb()
-        
-        print("✅ MANUAL: Vendor embedding regeneration completed successfully")
-        
-        return VendorEmbeddingResponse(
-            success=True,
-            message="Vendor embeddings regenerated successfully via manual trigger",
-            vendor_count=len(vendor_service.vendor_locations),
-            embeddings_generated=True,
-            faiss_index_built=True
-        )
-        
-    except Exception as e:
-        print(f"❌ MANUAL: Error regenerating vendor embeddings: {e}")
-        return VendorEmbeddingResponse(
-            success=False,
-            message=f"Error regenerating vendor embeddings: {str(e)}",
-            vendor_count=0,
-            embeddings_generated=False,
-            faiss_index_built=False
-        )
 
 @app.get("/api/vendor/embeddings/status")
 async def get_vendor_embeddings_status():
@@ -949,7 +903,7 @@ def run_vendor_embeddings_cron():
 def start_cron_scheduler():
     """Start the cron scheduler in a separate thread"""
     def run_scheduler():
-        # Schedule vendor embeddings regeneration daily at 12:00 AM
+        # Schedule vendor embeddings regeneration daily at 10:24 PM
         schedule.every().day.at("00:00").do(run_vendor_embeddings_cron)
         
         print("🕛 CRON SCHEDULER: Started - Vendor embeddings will regenerate daily at 12:00 AM")
