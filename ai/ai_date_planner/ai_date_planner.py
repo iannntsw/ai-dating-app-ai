@@ -35,7 +35,7 @@ class AIDatePlanner:
     4. Itinerary generation (creating specific date plans)
     """
     
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: str = "ai/ai_date_planner/data"):
         """Initialize the AI Date Planner with all required services"""
         self.data_dir = data_dir
         
@@ -64,7 +64,7 @@ class AIDatePlanner:
         Returns:
             DatePlanResult with complete date plan and processing details
         """
-        print(f"\n🎯 Starting AI Date Planning...")
+        print(f"\nStarting AI Date Planning...")
         print(f"Exclusions: {exclusions or 'None'}")
         print(f"Preferences: {preferences.start_time} - {preferences.end_time or 'flexible'}")
         
@@ -82,15 +82,15 @@ class AIDatePlanner:
         locations = self._get_locations()
         
         # Step 2: Apply rule-based filtering
-        print("\n📋 Step 1: Rule-based filtering...")
+        print("\nStep 1: Rule-based filtering...")
         filter_result = self.rule_engine.filter_locations(locations, preferences, self._current_exclusions)
         
         # Step 3: RAG-based relevance search
-        print("\n🧠 Step 2: AI-powered relevance search...")
+        print("\nStep 2: AI-powered relevance search...")
         rag_result = self.rag_service.find_relevant_locations(filter_result, preferences)
         
         # Step 4: Generate specific itinerary
-        print("\n📅 Step 3: Generating specific itinerary...")
+        print("\nStep 3: Generating specific itinerary...")
         date_plan = self._generate_itinerary(rag_result, preferences)
         
         # Compile processing statistics
@@ -128,10 +128,15 @@ class AIDatePlanner:
         
         # Add vendor food locations (from vendor FAISS)
         # Vendor food doesn't come through static RAG, so we need to search vendor FAISS separately
+        # Store vendor food separately - don't add to relevant_locations yet
+        # It will be added during meal planning when we know the specific meal type
         vendor_food_locations = self._search_vendor_food(preferences)
         if vendor_food_locations:
-            relevant_locations.extend(vendor_food_locations)
-            print(f"  🍽️ Added {len(vendor_food_locations)} vendor food locations from vendor FAISS")
+            # Apply budget filtering to vendor food using price attribute
+            vendor_food_locations = self._filter_vendor_food_by_budget(vendor_food_locations, preferences.budget_tier)
+            print(f"  Found {len(vendor_food_locations)} vendor food locations from vendor FAISS (after budget filtering)")
+            # Store vendor food for later use in meal planning
+            self._vendor_food_locations = vendor_food_locations
         
         # Group locations by type
         location_groups = self._group_locations_by_type(relevant_locations)
@@ -355,7 +360,7 @@ class AIDatePlanner:
         return True
     
     def _rank_by_date_type_match(self, locations: List[Location], date_type: str) -> List[Location]:
-        """Re-rank food locations using simple keyword matching for date type"""
+        """Re-rank food locations using simple keyword matching for date type, preserving vendor priority"""
         # Date type keyword mapping (simple approach)
         date_type_keywords = {
             'romantic': ['romantic', 'intimate', 'fine dining', 'rooftop', 'waterfront', 'wine', 'candlelit', 'elegant', 'cozy', 'scenic'],
@@ -368,27 +373,52 @@ class AIDatePlanner:
         if not keywords:
             return locations
         
-        # Score each location by keyword matches
-        scored = []
-        for loc in locations:
-            score = 0
-            name_lower = loc.name.lower()
-            desc_lower = (loc.description or '').lower()
-            
-            for keyword in keywords:
-                if keyword in name_lower or keyword in desc_lower:
-                    score += 1
-            
-            scored.append((score, loc))
+        # Separate vendor and static locations
+        vendor_locations = []
+        static_locations = []
         
-        # Sort by score (descending)
-        scored.sort(key=lambda x: x[0], reverse=True)
+        for loc in locations:
+            # Check if it's a vendor location (has isVendor in metadata)
+            is_vendor = False
+            if hasattr(loc, 'metadata'):
+                if isinstance(loc.metadata, dict):
+                    is_vendor = loc.metadata.get('isVendor', False)
+            
+            if is_vendor:
+                vendor_locations.append(loc)
+            else:
+                static_locations.append(loc)
+        
+        # Score each location by keyword matches
+        def score_locations(loc_list):
+            scored = []
+            for loc in loc_list:
+                score = 0
+                name_lower = loc.name.lower()
+                desc_lower = (loc.description or '').lower()
+                
+                for keyword in keywords:
+                    if keyword in name_lower or keyword in desc_lower:
+                        score += 1
+                
+                scored.append((score, loc))
+            
+            # Sort by score (descending)
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [loc for _, loc in scored]
+        
+        # Rank vendor and static locations separately
+        ranked_vendor = score_locations(vendor_locations)
+        ranked_static = score_locations(static_locations)
+        
+        # PRESERVE VENDOR PRIORITY: Vendor locations come first, then static
+        final_ranking = ranked_vendor + ranked_static
         
         # Count matches
-        matched = sum(1 for score, _ in scored if score > 0)
-        print(f"  🎯 Date type keyword matching ({date_type}): {matched}/{len(locations)} venues matched")
+        matched = sum(1 for loc in final_ranking if any(keyword in loc.name.lower() or keyword in (loc.description or '').lower() for keyword in keywords))
+        print(f"  🎯 Date type keyword matching ({date_type}): {matched}/{len(locations)} venues matched (vendor priority preserved)")
         
-        return [loc for _, loc in scored]
+        return final_ranking
     
     def _create_time_based_itinerary(self, location_groups: Dict[str, List[Location]], preferences: UserPreferences, duration: float) -> List[Dict[str, Any]]:
         """Create itinerary based on actual time ranges and duration"""
@@ -530,6 +560,13 @@ class AIDatePlanner:
         
         available_food = [loc for loc in location_groups['food'] if loc.id not in used_location_ids]
         
+        # Add vendor food locations for this specific meal type
+        if hasattr(self, '_vendor_food_locations') and self._vendor_food_locations:
+            # Only add vendor food that hasn't been used yet
+            unused_vendor_food = [loc for loc in self._vendor_food_locations if loc.id not in used_location_ids]
+            available_food.extend(unused_vendor_food)
+            print(f"  Added {len(unused_vendor_food)} vendor food locations for {meal_type}")
+        
         # Filter out dessert places for main meals (breakfast, lunch, dinner)
         if meal_type in ['Coffee/Breakfast', 'Lunch', 'Dinner', 'Late Dinner']:
             dessert_keywords = [
@@ -574,7 +611,8 @@ class AIDatePlanner:
         # Filter locations based on meal type appropriateness
         meal_appropriate_food = [loc for loc in available_food if self._is_appropriate_for_meal(loc, meal_type)]
         
-        print(f"🍽️ Planning {meal_type}: {len(available_food)} total, {len(meal_appropriate_food)} appropriate")
+        print(f"Planning {meal_type}: {len(available_food)} total, {len(meal_appropriate_food)} appropriate")
+        
         
         # ============================================================================
         # VENDOR FOOD PRIORITIZATION: 
@@ -597,6 +635,7 @@ class AIDatePlanner:
                 static_food.append(loc)
         
         print(f"  📊 Food breakdown: {len(vendor_food)} vendor, {len(static_food)} static")
+        
         
         if vendor_food:
             # Filter vendor food by date vibe matching
@@ -692,7 +731,12 @@ class AIDatePlanner:
                 if hawker_locations:
                     food_location = hawker_locations[0]
         else:
-                    food_location = meal_appropriate_food[min(food_index, len(meal_appropriate_food) - 1)]
+            # For lunch/dinner, use the first item (which should be vendor food if prioritized)
+            if meal_appropriate_food:
+                food_location = meal_appropriate_food[0]  # Take the first (prioritized) item
+            else:
+                print(f"❌ ERROR: No food locations available for {meal_type}!")
+                return None
         
         # Calculate travel time FIRST (before adjusting duration)
         start_time = current_time
@@ -1428,9 +1472,9 @@ class AIDatePlanner:
     def _get_budget_cost(self, budget_tier: str, multiplier: float = 1.0) -> tuple:
         """Get cost range for a budget tier with multiplier"""
         base_costs = {
-            "$": (10, 15),
-            "$$": (20, 40),
-            "$$$": (50, 70)
+            "$": (0, 9),        # Below $10
+            "$$": (10, 30),     # $10-30
+            "$$$": (31, 100000000000)   # $30+ (unrealistic big number)
         }
         
         base = base_costs.get(budget_tier, (20, 40))
@@ -1909,4 +1953,43 @@ class AIDatePlanner:
         except Exception as e:
             print(f"  ❌ Error searching vendor food: {e}")
             return []
+    
+    def _filter_vendor_food_by_budget(self, vendor_food_locations: List[Location], budget_tier: str) -> List[Location]:
+        """Filter vendor food locations by budget tier using price attribute"""
+        if not vendor_food_locations:
+            return []
+        
+        # Define budget ranges
+        budget_ranges = {
+            "$": (0, 9),       # Below $10
+            "$$": (10, 30),    # $10-30
+            "$$$": (31, 100000000000)  # $30+ (unrealistic big number)
+        }
+        
+        if budget_tier not in budget_ranges:
+            print(f"  ⚠️ Invalid budget tier '{budget_tier}', keeping all vendor food")
+            return vendor_food_locations
+        
+        min_price, max_price = budget_ranges[budget_tier]
+        filtered_locations = []
+        
+        for location in vendor_food_locations:
+            # Get vendor price from metadata
+            vendor_price = location.metadata.get('price', 0)
+            
+            # If no price set, keep the location (fallback to static budget filtering)
+            if vendor_price == 0 or vendor_price is None:
+                print(f"    💰 No vendor price set for {location.name}, keeping (fallback to static filtering)")
+                filtered_locations.append(location)
+                continue
+            
+            # Check if price falls within budget range
+            if min_price <= vendor_price <= max_price:
+                filtered_locations.append(location)
+                print(f"    ✅ {location.name}: ${vendor_price} (within {budget_tier} range)")
+            else:
+                print(f"    🚫 {location.name}: ${vendor_price} (outside {budget_tier} range ${min_price}-${max_price})")
+        
+        print(f"  💰 Vendor food budget filter: {len(filtered_locations)}/{len(vendor_food_locations)} locations match {budget_tier} tier")
+        return filtered_locations
     
