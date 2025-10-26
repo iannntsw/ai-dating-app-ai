@@ -11,6 +11,7 @@ class UserPreferences:
     start_longitude: Optional[float] = None  # Where the date starts
     start_time: str = "10:00"  # Start time in HH:MM format (24-hour)
     end_time: Optional[str] = None  # End time in HH:MM format (24-hour), optional
+    date: Optional[str] = None  # Date in YYYY-MM-DD format (defaults to today if not provided)
     time_of_day: str = "afternoon"  # morning, afternoon, evening, night
     date_type: str = "casual"  # casual, romantic, adventurous, cultural
     interests: List[str] = None  # ['food', 'culture', 'nature', 'sports', 'art', 'shopping']

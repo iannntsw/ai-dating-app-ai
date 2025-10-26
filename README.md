@@ -76,10 +76,22 @@ Frontend (React Native) → AI Service (FastAPI)
    python setup_date_planner_embeddings.py
    ```
 
+   **For Vendor Activities (Dynamic Activities):**
+
+   ```bash
+   # Manual trigger to generate vendor embeddings (for testing)
+   curl -X POST http://localhost:8000/api/vendor/embeddings/manual
+
+   # Check vendor embedding status
+   curl http://localhost:8000/api/vendor/embeddings/status
+   ```
+
    This will:
 
    - **Lovabot**: Read all PDF files from `ai/ai_lovabot/data/` folder, process and create embeddings for dating articles, save to `ai/ai_lovabot/embeddings.pkl`
    - **Date Planner**: Load all location data from GeoJSON/KML files, generate embeddings for locations, save to `ai/ai_date_planner/embeddings/` folder
+   - **Vendor Activities**: Fetch vendor activities from MongoDB, generate embeddings, save to `ai/ai_date_planner/embeddings_vendors.pkl` and `faiss_vendors.bin`
+   - **Cron Job**: Automatically regenerates vendor embeddings daily at 12:00 AM
    - Both systems will be ready to use after running these setup scripts
 
 6. **Set up Image Quality Assessment (NIMA)**
