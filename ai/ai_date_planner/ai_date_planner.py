@@ -130,6 +130,10 @@ class AIDatePlanner:
         # Vendor food doesn't come through static RAG, so we need to search vendor FAISS separately
         # Store vendor food separately - don't add to relevant_locations yet
         # It will be added during meal planning when we know the specific meal type
+        
+        # Clear any previously stored vendor food locations to ensure fresh filtering
+        self._vendor_food_locations = []
+        
         vendor_food_locations = self._search_vendor_food(preferences)
         if vendor_food_locations:
             # Apply budget filtering to vendor food using price attribute
@@ -1693,13 +1697,13 @@ class AIDatePlanner:
                         continue
                 # If no dates provided, assume always available
                 
-                # Apply distance guardrail (5-10 km from starting location)
+                # Apply distance guardrail (5 km from starting location)
                 if preferences.start_latitude and preferences.start_longitude:
                     distance_km = self._calculate_distance(
                         preferences.start_latitude, preferences.start_longitude,
                         location['coordinates'][1], location['coordinates'][0]  # lat, lng
                     )
-                    if distance_km > 10.0:  # 10 km max distance
+                    if distance_km > 5.0:  # 5 km max distance
                         print(f"    🚫 Vendor too far: {location['name']} ({distance_km:.1f}km)")
                         continue
                 
@@ -1869,6 +1873,7 @@ class AIDatePlanner:
                 
                 print(f"    🔍 Checking: {location_dict['name']} | type: {location_dict['location_type']}")
                 
+                
                 # Only include food type vendors
                 if location_dict['location_type'] != 'food':
                     print(f"      ❌ Skipped (not food)")
@@ -1926,7 +1931,7 @@ class AIDatePlanner:
                         preferences.start_latitude, preferences.start_longitude,
                         location_dict['coordinates'][1], location_dict['coordinates'][0]
                     )
-                    if distance_km > 10.0:  # 10 km max distance
+                    if distance_km > 5.0:  # 5 km max distance
                         print(f"      ❌ Too far ({distance_km:.1f}km)")
                         continue
                     else:
