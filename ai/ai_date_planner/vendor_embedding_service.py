@@ -153,9 +153,20 @@ class VendorEmbeddingService:
             print("⚠️ No vendor activities found")
             return np.array([])
         
-        # Convert activities to locations
+        # Convert activities to locations with deduplication
         vendor_locations = []
+        seen_vendor_ids = set()  # Track unique vendor activities
+        
         for activity in activities:
+            # Use vendor ID + title as unique key to prevent duplicates
+            vendor_key = f"{activity.get('vendorId', 'unknown')}_{activity.get('title', 'untitled')}"
+            
+            if vendor_key in seen_vendor_ids:
+                print(f"  🔄 Skipping duplicate vendor activity: {activity.get('title', 'Untitled')}")
+                continue
+                
+            seen_vendor_ids.add(vendor_key)
+            
             location = self.convert_vendor_activity_to_location(activity)
             if location:
                 vendor_locations.append(location)
@@ -297,12 +308,22 @@ class VendorEmbeddingService:
         # Search
         scores, indices = self.vendor_index.search(query_embedding.astype('float32'), k)
         
-        # Return results
+        # Return results with deduplication
         results = []
+        seen_location_ids = set()
+        
         for score, idx in zip(scores[0], indices[0]):
             if idx < len(self.vendor_locations):
+                location = self.vendor_locations[idx]
+                location_id = location['id']
+                
+                # Skip if already seen (prevent duplicates from FAISS)
+                if location_id in seen_location_ids:
+                    continue
+                    
+                seen_location_ids.add(location_id)
                 results.append({
-                    'location': self.vendor_locations[idx],
+                    'location': location,
                     'score': float(score)
                 })
         
