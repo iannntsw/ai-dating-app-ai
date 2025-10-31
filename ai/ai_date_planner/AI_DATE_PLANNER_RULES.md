@@ -173,7 +173,7 @@ When planning non-food activities, the system:
 2. **Applies Filtering:**
    - ✅ Date vibe must match date type (e.g., `category: "Romantic"` for romantic dates)
    - ✅ Date availability must be valid (within startDate/endDate range)
-   - ✅ Distance from starting location ≤ 10km (reasonable travel distance)
+   - ✅ Distance from starting location ≤ 5km (reasonable travel distance)
    - ✅ Not already used in itinerary (no duplicates)
    - ✅ Respects exclusions (e.g., nature exclusion filters out nature-focused vendor activities)
 3. **Returns ~5-20 vendor matches** (depends on query and filters)
@@ -198,7 +198,7 @@ After RAG search, the system selects activities:
 - ✅ Vendors get priority exposure (business model)
 - ✅ Static data acts as fallback (always enough options)
 - ✅ Vibe matching ensures quality (romantic vendor food for romantic dates)
-- ✅ Distance filtering prevents impractical suggestions (10km max)
+- ✅ Distance filtering prevents impractical suggestions (5km max)
 - ✅ Date filtering ensures availability (no expired activities)
 
 ### **Vendor Embedding Regeneration**
