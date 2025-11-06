@@ -1,7 +1,7 @@
 # Dockerfile for AI Dating App AI Service
 # Optimized for Render deployment
 
-FROM python:3.11-slim
+FROM python:3.12.2
 
 # Set working directory
 WORKDIR /app
