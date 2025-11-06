@@ -56,6 +56,9 @@ async def startup_event():
         print("⚠️  Date planning features will be unavailable, but the server will continue to run")
         planner = None
         # Don't raise - allow server to start even if Date Planner fails
+    
+    # Start cron scheduler when the app starts
+    start_cron_scheduler()
 
 # Add CORS middleware
 app.add_middleware(
@@ -903,7 +906,9 @@ def run_vendor_embeddings_cron():
     """Function to run vendor embeddings cron job"""
     try:
         print("🕛 CRON JOB: Starting scheduled vendor embedding regeneration...")
-        response = requests.post("http://localhost:8000/api/vendor/embeddings/cron")
+        port = os.environ.get("PORT", "8000")
+        base_url = f"http://localhost:{port}"
+        response = requests.post(f"{base_url}/api/vendor/embeddings/cron")
         result = response.json()
         print(f"🕛 CRON JOB: {result['message']}")
     except Exception as e:
@@ -926,8 +931,6 @@ def start_cron_scheduler():
     scheduler_thread.start()
     print("✅ CRON SCHEDULER: Background thread started")
 
-# Start cron scheduler when the app starts
-start_cron_scheduler()
 
 # Start the FastAPI server
 if __name__ == "__main__":

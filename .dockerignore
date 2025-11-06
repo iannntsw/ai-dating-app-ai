@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Environment files (use Render environment variables instead)
+.env
+.env.local
+.env.*.local
+
+# Node modules (if any)
+node_modules/
+package-lock.json
+package.json
+
+# Large test files and data (keep embeddings, but exclude test data)
+tests/
+ai/image-quality-assessment/sample_images/
+ai/image-quality-assessment/mkdocs/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
