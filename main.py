@@ -17,6 +17,7 @@ import numpy as np
 import schedule
 import time
 import threading
+import uvicorn
 
 # Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -51,8 +52,10 @@ async def startup_event():
         planner = AIDatePlanner(data_dir="ai/ai_date_planner/data")
         print("AI Date Planner initialized successfully!")
     except Exception as e:
-        print(f"Failed to initialize AI Date Planner: {e}")
-        raise
+        print(f"⚠️  Warning: Failed to initialize AI Date Planner: {e}")
+        print("⚠️  Date planning features will be unavailable, but the server will continue to run")
+        planner = None
+        # Don't raise - allow server to start even if Date Planner fails
 
 # Add CORS middleware
 app.add_middleware(
@@ -65,7 +68,13 @@ app.add_middleware(
 
 @app.get("/")
 def get_hello():
-    return "Hello, World! Connected to AI"
+    """Health check endpoint - Render uses this to detect the service"""
+    return {"status": "ok", "message": "AI Service is running"}
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for monitoring"""
+    return {"status": "healthy", "planner_ready": planner is not None}
     
 
 @app.post("/ai/bio")
@@ -919,3 +928,12 @@ def start_cron_scheduler():
 
 # Start cron scheduler when the app starts
 start_cron_scheduler()
+
+# Start the FastAPI server
+if __name__ == "__main__":
+    
+    # Get port from environment variable (Render sets this automatically)
+    port = int(os.environ.get("PORT", 8000))
+    
+    # Start server - must listen on 0.0.0.0 for Render to detect the port
+    uvicorn.run(app, host="0.0.0.0", port=port)

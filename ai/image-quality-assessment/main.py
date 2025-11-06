@@ -173,6 +173,3 @@ async def predict_batch_images(files: list[UploadFile] = File(...)):
         for tmp_file in temp_files:
             if os.path.exists(tmp_file):
                 os.unlink(tmp_file)
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
